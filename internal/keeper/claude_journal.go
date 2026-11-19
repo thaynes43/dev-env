@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -267,7 +268,7 @@ func (j *claudeJournal) write(ctx context.Context, original *corev1.Secret, r cl
 	if provenance != nil {
 		data[claudeProvenanceKey] = provenance
 	}
-	if recovery != nil {
+	if recovery != nil && !bytes.Equal(recovery, original.Data[claudeRecoveryKey]) {
 		data[claudeRecoveryKey] = recovery
 	}
 	return j.patch(ctx, original, data)

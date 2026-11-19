@@ -379,16 +379,16 @@ func TestClaudeRefreshOutcomeCounters(t *testing.T) {
 			}
 			f.tick()
 			families, err := registry.Gather()
-			if err != nil || len(families) != 1 || families[0].GetName() != "dev_env_keeper_claude_refresh_outcomes_total" || len(families[0].Metric) != 8 {
+			if err != nil || len(families) != 1 || families[0].GetName() != "dev_env_keeper_claude_refresh_outcomes_total" || len(families[0].Metric) != 16 {
 				t.Fatal("counter did not expose a fixed set of outcomes")
 			}
 			var counted bool
 			for _, metric := range families[0].Metric {
-				if len(metric.Label) != 1 || metric.Label[0].GetName() != "outcome" {
+				if len(metric.Label) != 2 || metric.Label[0].GetName() != "outcome" || metric.Label[1].GetName() != "trigger" {
 					t.Fatal("unexpected metric label")
 				}
 				var want float64
-				if metric.Label[0].GetValue() == tc.name {
+				if metric.Label[0].GetValue() == tc.name && metric.Label[1].GetValue() == "scheduled" {
 					want = 1
 					counted = true
 				}

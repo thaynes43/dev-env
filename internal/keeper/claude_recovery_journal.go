@@ -27,6 +27,7 @@ const (
 	claudeRecoveryAccountMismatch
 	claudeRecoveryDeadline
 	claudeRecoveryFlapping
+	claudeRecoveryAttemptLimit
 )
 
 const claudePageUndelivered = 1
@@ -75,6 +76,7 @@ type claudeRecoveryState struct {
 	IncarnationLow   uint64                 `json:"incarnationLow"`
 	LastAttempt      int64                  `json:"lastAttemptAtUnixNano"`
 	CooldownUntil    int64                  `json:"cooldownUntilUnixNano"`
+	AttemptTimes     []int64                `json:"attemptTimesUnixNano,omitempty"`
 	Incident         claudeRecoveryIncident `json:"incident"`
 	Probes           []claudeProbeRecord    `json:"probes,omitempty"`
 	EarlyTransitions []claudeTransition     `json:"earlyTransitions,omitempty"`
@@ -82,15 +84,24 @@ type claudeRecoveryState struct {
 
 func (s claudeRecoveryState) valid() bool {
 	if s.Version != 1 || len(s.Probes) > claudeHistoryLimit || len(s.EarlyTransitions) > claudeHistoryLimit ||
+		len(s.AttemptTimes) > claudeEarlyMaxDailyLimit ||
 		s.LastAttempt < 0 || s.CooldownUntil < s.LastAttempt || (s.LastAttempt == 0) != (s.CooldownUntil == 0) {
 		return false
+	}
+	var lastAttempt int64
+	for _, at := range s.AttemptTimes {
+		if at <= lastAttempt || at > s.LastAttempt {
+			return false
+		}
+		lastAttempt = at
 	}
 	i := s.Incident
 	if i.Generation == 0 {
 		if i != (claudeRecoveryIncident{}) {
 			return false
 		}
-	} else if i.ReferenceHigh|i.ReferenceLow == 0 || i.OpenedAt <= 0 || i.OpenedAt > s.LastAttempt ||
+	} else if i.ReferenceHigh|i.ReferenceLow == 0 || i.OpenedAt <= 0 ||
+		(i.OpenedAt > s.LastAttempt && i.Page.Failure != claudeRecoveryAttemptLimit) ||
 		(i.Replacement != 0 && i.Replacement <= i.Generation) || (i.Published && i.Replacement == 0) || (i.Resolved && i.Held) {
 		return false
 	}
@@ -100,7 +111,10 @@ func (s claudeRecoveryState) valid() bool {
 			return false
 		}
 	} else if p.Delivery != claudePageUndelivered || p.At <= 0 || p.Generation < i.Generation ||
-		p.Failure < claudeRecoveryNotSent || p.Failure > claudeRecoveryFlapping {
+		p.Failure < claudeRecoveryNotSent || p.Failure > claudeRecoveryAttemptLimit {
+		return false
+	}
+	if p.Failure == claudeRecoveryAttemptLimit && (i.Replacement != 0 || p.At < i.OpenedAt || p.Generation != i.Generation || (!i.Held && !i.Resolved)) {
 		return false
 	}
 	var previous uint64
@@ -150,6 +164,21 @@ func (s claudeRecoveryState) floor(interval time.Duration) int64 {
 	return max(s.CooldownUntil, int64(min(uint64(s.LastAttempt)+uint64(interval), uint64(1<<63-1))))
 }
 
+func (s *claudeRecoveryState) addAttempt(at int64, limit int) bool {
+	oldest := at - int64(claudeEarlyAttemptWindow)
+	start := 0
+	for start < len(s.AttemptTimes) && s.AttemptTimes[start] <= oldest {
+		start++
+	}
+	if len(s.AttemptTimes)-start >= limit {
+		return false
+	}
+	// The decision starts from a copy of the observed state. Leave that
+	// snapshot intact if the new latch cannot be committed.
+	s.AttemptTimes = append(append([]int64(nil), s.AttemptTimes[start:]...), at)
+	return true
+}
+
 // A new adoption clears a hold, while the inter-attempt floor survives. An
 // upgrade can start with a Ready record from before slice 3 and no known
 // incarnation. In that case the journal UID and generation still fence the
@@ -169,6 +198,7 @@ func (s *claudeRecoveryState) useIncarnation(secret *corev1.Secret, generation u
 func (s *claudeRecoveryState) setIncarnation(high, low uint64) {
 	if s.IncarnationHigh != high || s.IncarnationLow != low {
 		s.IncarnationHigh, s.IncarnationLow = high, low
+		s.AttemptTimes = nil
 		if s.Incident.Generation != 0 {
 			s.Incident.Resolved, s.Incident.Held = true, false
 		}
@@ -184,7 +214,7 @@ func (s *claudeRecoveryState) addTransition(t claudeTransition) {
 	}
 }
 
-func (s *claudeRecoveryState) observe(generation uint64, at int64, class claudeProbeClass) *claudeProbeRecord {
+func (s *claudeRecoveryState) observe(generation uint64, at int64, class claudeProbeClass, lastHealthy int64) *claudeProbeRecord {
 	if n := len(s.Probes); n == 0 || s.Probes[n-1].Generation < generation {
 		s.Probes = append(s.Probes, claudeProbeRecord{Generation: generation})
 		if len(s.Probes) > claudeHistoryLimit {
@@ -193,18 +223,26 @@ func (s *claudeRecoveryState) observe(generation uint64, at int64, class claudeP
 	}
 	p := &s.Probes[len(s.Probes)-1]
 	p.ObservedAt, p.Class = at, class
-	if class == claudeProbeHealthy {
-		p.LastHealthy = at
-	}
+	p.LastHealthy = max(p.LastHealthy, lastHealthy)
 	if class == claudeProbeUnauthorized && p.First401 == 0 {
 		p.First401, p.LastHealthyBefore401 = at, p.LastHealthy
 	}
 	return p
 }
 
-func (s claudeRecoveryState) firstUsable(generation uint64) int64 {
-	if n := len(s.Probes); n > 0 && s.Probes[n-1].Generation == generation {
-		return s.Probes[n-1].FirstUsable
+// Coalesce timestamps when they are the only change. A first usable probe or
+// first 401 is evidence even if the result class was already recorded.
+func (p *claudeProbeRecord) coalesce(previous claudeProbeRecord) {
+	if p.Generation == previous.Generation && p.Class == previous.Class &&
+		p.FirstUsable == previous.FirstUsable && p.First401 == previous.First401 &&
+		p.ObservedAt-previous.ObservedAt < int64(claudeProbeHeartbeat) {
+		*p = previous
 	}
-	return 0
+}
+
+func (s claudeRecoveryState) lastProbe(generation uint64) claudeProbeRecord {
+	if n := len(s.Probes); n > 0 && s.Probes[n-1].Generation == generation {
+		return s.Probes[n-1]
+	}
+	return claudeProbeRecord{}
 }

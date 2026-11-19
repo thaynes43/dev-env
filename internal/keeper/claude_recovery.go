@@ -1,32 +1,64 @@
 package keeper
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/internal/claudeauth"
 )
 
 const (
-	DefaultClaudeProbeInterval = time.Minute
-	DefaultClaudeEarlyInterval = 5 * time.Minute
+	DefaultClaudeProbeInterval   = time.Minute
+	DefaultClaudeEarlyInterval   = 5 * time.Minute
+	DefaultClaudeEarlyDailyLimit = 2
+	claudeProbeHeartbeat         = 15 * time.Minute
+	claudeEarlyAttemptWindow     = 24 * time.Hour
+	claudeEarlyMaxDailyLimit     = 32 // keeps every timestamp within the v1 journal size bound
 )
 
 // ClaudeEarlyRecoveryOptions is independent of the scheduled refresh policy.
 type ClaudeEarlyRecoveryOptions struct {
-	Enabled       bool
-	ProbeInterval time.Duration
-	MinInterval   time.Duration
+	Enabled           bool
+	ProbeInterval     time.Duration
+	MinInterval       time.Duration
+	MaxAttemptsPerDay int
 }
 
 func (o ClaudeOptions) ValidateEarlyRecovery() error {
-	if o.EarlyRecovery.Enabled && (!o.Enabled || o.EarlyRecovery.ProbeInterval <= 0 || o.EarlyRecovery.MinInterval <= 0) {
-		return errors.New("claude early recovery requires Claude auth and positive probe and minimum intervals")
+	early := o.EarlyRecovery
+	if early.Enabled && !o.Enabled {
+		return errors.New("claude early recovery requires Claude auth")
+	}
+	if early.ProbeInterval < 30*time.Second {
+		return errors.New("claude early probe interval must be at least 30s")
+	}
+	if early.MinInterval < 2*time.Minute || early.MinInterval/2 < early.ProbeInterval {
+		return errors.New("claude early minimum interval must be at least 2m and at least twice the probe interval")
+	}
+	if early.MaxAttemptsPerDay < 1 || early.MaxAttemptsPerDay > claudeEarlyMaxDailyLimit {
+		return errors.New("claude early maximum attempts per day must be between 1 and 32")
 	}
 	return nil
+}
+
+type claudeProbeIdentity struct {
+	journal         types.UID
+	generation      uint64
+	incarnationHigh uint64
+	incarnationLow  uint64
+}
+
+// Only the probe loop owns this memory. The journal supplies the fallback
+// after a restart and remains authoritative for attempts and holds.
+type claudeProbeMemory struct {
+	identity    claudeProbeIdentity
+	requestedAt int64
+	lastHealthy int64
 }
 
 // Probe times are anchored to the keeper's start. A long probe or tick skips
@@ -54,17 +86,30 @@ func (w *claudeWorker) probeClaude(ctx context.Context) {
 		return
 	}
 	secret, snapshot, err := w.load(ctx)
-	if err != nil || snapshot.Stage != claudeReady || snapshot.Access.Validate(w.Clock.Now()) != nil ||
+	if err != nil || snapshot.Stage != claudeReady || !claudeProbeAccessUsable(snapshot.Access, w.Clock.Now()) ||
 		w.Fence(ctx, claudeRequestTime+claudeSafetyMargin) != nil {
 		return
 	}
 	state, ok := loadClaudeRecovery(secret, snapshot.Access.Generation)
 	if !ok {
-		w.Log.Info("claude early recovery journal is unavailable")
 		return
 	}
+	gen := snapshot.Access.Generation
+	identity := claudeProbeIdentity{secret.UID, gen, state.IncarnationHigh, state.IncarnationLow}
+	if w.probeMemory.identity != identity {
+		w.probeMemory = claudeProbeMemory{identity: identity}
+	}
+	requestedAt := claudeObservedTime(w.Clock.Now())
+	if state.Incident.Held || state.Incident.Generation == gen {
+		last := max(state.lastProbe(gen).ObservedAt, w.probeMemory.requestedAt)
+		if last != 0 && requestedAt-last < int64(claudeProbeHeartbeat) {
+			return
+		}
+	}
+	w.probeMemory.requestedAt = requestedAt
 	profile, err := w.Transport.profile(ctx, newSecretValue(snapshot.Access.AccessToken))
 	class := classifyClaudeProbe(snapshot.Access, profile, err)
+	w.countClaudeProbe(class)
 	at := claudeObservedTime(w.Clock.Now())
 
 	w.mu.Lock()
@@ -74,34 +119,57 @@ func (w *claudeWorker) probeClaude(ctx context.Context) {
 	}
 	current, ready, err := w.load(ctx)
 	if err != nil || current.UID != secret.UID || ready.Stage != claudeReady || !sameClaudeAccess(ready.Access, snapshot.Access) ||
-		ready.Access.Validate(w.Clock.Now()) != nil {
+		!claudeProbeAccessUsable(ready.Access, w.Clock.Now()) {
 		return
 	}
-	gen := ready.Access.Generation
 	recovery, ok := loadClaudeRecovery(current, gen)
 	if !ok || recovery.IncarnationHigh != state.IncarnationHigh || recovery.IncarnationLow != state.IncarnationLow {
 		return
 	}
-	observation := recovery.observe(gen, at, class)
+	w.reportClaudeRecovery(current.UID, recovery, true)
+	previous := recovery.lastProbe(gen)
+	if at < previous.ObservedAt {
+		return
+	}
+	if class == claudeProbeHealthy {
+		w.probeMemory.lastHealthy = at
+	}
+	observation := recovery.observe(gen, at, class, w.probeMemory.lastHealthy)
 	attempt := recovery
-	if w.considerEarlyRefresh(&attempt, observation) {
+	scheduled := class == claudeProbeHealthy && claudeScheduledGeneration(current, gen)
+	if w.considerEarlyRefresh(&attempt, observation, scheduled) {
 		saved, replacement, err := w.dispatchClaudeRefresh(ctx, current, ready, &attempt)
 		if err == nil {
 			w.publishClaudeReady(context.WithoutCancel(ctx), saved, replacement)
 		} else if w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) == nil {
 			// Retain the observed 401 if preflight failed before changing the
 			// journal. A committed intent or any other writer wins this CAS.
+			observation.coalesce(previous)
 			w.recordClaudeRecovery(ctx, current, recovery)
 		}
 		return
 	}
+	observation.coalesce(previous)
 	w.recordClaudeRecovery(ctx, current, attempt)
+}
+
+func claudeProbeAccessUsable(access claudeauth.Access, now time.Time) bool {
+	return access.ExpiresAt.Sub(now) > claudeRequestBudget && access.Validate(now) == nil
+}
+
+func claudeScheduledGeneration(secret *corev1.Secret, generation uint64) bool {
+	p, err := decodeClaudeProvenance(secret.Data[claudeProvenanceKey])
+	if err != nil || len(p.Transitions) == 0 {
+		return false
+	}
+	last := p.Transitions[len(p.Transitions)-1]
+	return last.Generation == generation && last.Operation == claudeScheduledRefresh
 }
 
 func classifyClaudeProbe(access claudeauth.Access, profile claudeProfile, err error) claudeProbeClass {
 	if err != nil {
 		var class claudeProbeClass
-		if errors.As(err, &class) {
+		if errors.As(err, &class) && class >= claudeProbeUnauthorized && class <= claudeProbeUnavailable {
 			return class
 		}
 		return claudeProbeUnavailable
@@ -114,7 +182,7 @@ func classifyClaudeProbe(access claudeauth.Access, profile claudeProfile, err er
 
 // considerEarlyRefresh consumes only journal state and a fresh own-token
 // observation. The caller persists the latch and intent in a single CAS.
-func (w *claudeWorker) considerEarlyRefresh(state *claudeRecoveryState, p *claudeProbeRecord) bool {
+func (w *claudeWorker) considerEarlyRefresh(state *claudeRecoveryState, p *claudeProbeRecord, scheduled bool) bool {
 	i := &state.Incident
 	floor := state.floor(w.EarlyRecovery.MinInterval)
 	if i.Generation != 0 && !i.Resolved {
@@ -132,7 +200,7 @@ func (w *claudeWorker) considerEarlyRefresh(state *claudeRecoveryState, p *claud
 				if p.FirstUsable == 0 {
 					p.FirstUsable = p.ObservedAt
 				}
-				if p.ObservedAt >= floor {
+				if scheduled || p.ObservedAt >= floor {
 					if p.FirstUsable > floor {
 						i.page(p.ObservedAt, p.Generation, claudeRecoveryDeadline)
 					}
@@ -154,6 +222,11 @@ func (w *claudeWorker) considerEarlyRefresh(state *claudeRecoveryState, p *claud
 	}
 	high, low := newClaudeIncarnation()
 	*i = claudeRecoveryIncident{Generation: p.Generation, OpenedAt: p.First401, ReferenceHigh: high, ReferenceLow: low}
+	if !state.addAttempt(at, w.EarlyRecovery.MaxAttemptsPerDay) {
+		i.Held = true
+		i.page(at, p.Generation, claudeRecoveryAttemptLimit)
+		return false
+	}
 	state.LastAttempt, state.CooldownUntil = at, until
 	return true
 }
@@ -214,7 +287,7 @@ func (w *claudeWorker) reconcileClaudeRecovery(ctx context.Context, secret *core
 	pending := i.Replacement == gen && !i.Published && w.Clock.Now().Before(ready.Access.ExpiresAt)
 	now := claudeObservedTime(w.Clock.Now())
 	if i.Generation != 0 && !i.Resolved && i.Page.Delivery == 0 && now > state.floor(w.EarlyRecovery.MinInterval) &&
-		state.firstUsable(gen) == 0 &&
+		state.lastProbe(gen).FirstUsable == 0 &&
 		w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) == nil {
 		i.page(now, gen, claudeRecoveryDeadline)
 		secret = w.recordClaudeRecovery(ctx, secret, state)
@@ -224,7 +297,11 @@ func (w *claudeWorker) reconcileClaudeRecovery(ctx context.Context, secret *core
 
 func (w *claudeWorker) recordClaudeRecovery(ctx context.Context, secret *corev1.Secret, state claudeRecoveryState) *corev1.Secret {
 	if raw := state.encode(); raw != nil {
+		if bytes.Equal(raw, secret.Data[claudeRecoveryKey]) {
+			return secret
+		}
 		if saved, err := w.Journal.patch(ctx, secret, map[string]any{claudeRecoveryKey: raw}); err == nil {
+			w.reportClaudeRecovery(saved.UID, state, true)
 			return saved
 		}
 	}

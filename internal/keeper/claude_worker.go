@@ -70,10 +70,12 @@ type claudeWorker struct {
 	// Obs receives the journal's state for the login gauges and the notifier;
 	// nil keeps the worker as it was.
 	Obs *LoginHub
-	// Outcomes counts scheduled refresh outcomes by a fixed class.
+	// Outcomes counts refresh outcomes by a fixed class and trigger.
 	Outcomes *prometheus.CounterVec
 	// EarlyRecovery is immutable after construction.
-	EarlyRecovery ClaudeEarlyRecoveryOptions
+	EarlyRecovery   ClaudeEarlyRecoveryOptions
+	RecoveryMetrics *claudeEarlyMetrics
+	probeMemory     claudeProbeMemory // owned by the probe goroutine
 
 	// mu serializes a refresh tick with every control request, so an adoption
 	// never overlaps a refresh in flight. Everything below is guarded by it.
@@ -171,9 +173,13 @@ func (w *claudeWorker) tick(ctx context.Context) {
 	defer w.mu.Unlock()
 	secret, r, err := w.load(ctx)
 	if err != nil {
+		if m := w.RecoveryMetrics; m != nil {
+			m.unavailable.Set(1)
+		}
 		w.note("journal-unavailable")
 		return
 	}
+	w.observeClaudeRecovery(secret, r.Access.Generation)
 	if r.Stage != claudeIntent {
 		w.observe(ctx, string(secret.UID), r)
 	}
@@ -280,19 +286,15 @@ func (w *claudeWorker) recordClaudePublication(ctx context.Context, secret *core
 func newClaudeRefreshOutcomes() *prometheus.CounterVec {
 	c := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "dev_env_keeper_claude_refresh_outcomes_total",
-		Help: "Scheduled Claude refresh outcomes after entering the transport, by fixed class. Success means the replacement was saved. " +
+		Help: "Claude refresh outcomes after entering the transport, by fixed class and trigger. Success means the replacement was saved. " +
 			"The save-unavailable class includes a lost acknowledgement after a successful save.",
-	}, []string{"outcome"})
-	for _, outcome := range []string{"success", "not-sent", "possibly-spent", "status", "read", "invalid", "account-mismatch", "save-unavailable"} {
-		c.WithLabelValues(outcome)
+	}, []string{"outcome", "trigger"})
+	for _, trigger := range []string{"scheduled", "early"} {
+		for _, outcome := range []string{"success", "not-sent", "possibly-spent", "status", "read", "invalid", "account-mismatch", "save-unavailable"} {
+			c.WithLabelValues(outcome, trigger)
+		}
 	}
 	return c
-}
-
-func (w *claudeWorker) countRefreshOutcome(outcome string) {
-	if w.Outcomes != nil {
-		w.Outcomes.WithLabelValues(outcome).Inc()
-	}
 }
 
 // refresh performs one journaled refresh and returns the Ready record that
@@ -332,15 +334,18 @@ func (w *claudeWorker) dispatchClaudeRefresh(ctx context.Context, secret *corev1
 	intent := prev
 	intent.Stage, intent.AttemptUID = claudeIntent, string(uuid.NewUUID())
 	var latch []byte
-	countOutcome := w.countRefreshOutcome
+	trigger := "scheduled"
 	if early != nil {
 		latch = early.encode()
-		if latch == nil || prev.Access.Validate(w.Clock.Now()) != nil {
+		if latch == nil || !claudeProbeAccessUsable(prev.Access, w.Clock.Now()) {
 			return nil, claudeRecord{}, errClaudeRecoveryJournal
 		}
-		// Early outcomes live in the early-recovery journal. Keep the
-		// scheduled counter's scope and labels unchanged.
-		countOutcome = func(string) {}
+		trigger = "early"
+	}
+	countOutcome := func(outcome string) {
+		if w.Outcomes != nil {
+			w.Outcomes.WithLabelValues(outcome, trigger).Inc()
+		}
 	}
 	// The intent, unsent marker and early latch are one compare-and-swap.
 	if w.Journal.saveIntent(ctx, secret, intent, latch) != nil {
@@ -452,6 +457,7 @@ func (w *claudeWorker) dispatchClaudeRefresh(ctx context.Context, secret *corev1
 		return nil, claudeRecord{}, errClaudeJournal
 	}
 	countOutcome("success")
+	w.observeClaudeRecovery(saved, next.Access.Generation)
 	w.note("refreshed")
 	w.observe(ctx, string(secret.UID), next)
 	return saved, next, nil
@@ -533,7 +539,10 @@ func (w *claudeWorker) abandon(ctx context.Context, journalUID string, ready cla
 		return false
 	}
 	recovery := w.claudeRecoveryFailureData(secret, ready.Access.Generation, claudeRecoveryNotSent)
-	_, err = w.Journal.write(ctx, secret, ready, nil, nil, recovery)
+	saved, err := w.Journal.write(ctx, secret, ready, nil, nil, recovery)
+	if err == nil {
+		w.observeClaudeRecovery(saved, ready.Access.Generation)
+	}
 	return err == nil
 }
 
@@ -553,9 +562,11 @@ func (w *claudeWorker) needsLoginAfter(ctx context.Context, uid string, failure 
 	}
 	r.Stage, r.AttemptUID, r.Refresh, r.RefreshExpiresAt = claudeNeedsLogin, "", secretValue{}, time.Time{}
 	recovery := w.claudeRecoveryFailureData(secret, r.Access.Generation, failure)
-	if _, err := w.Journal.write(ctx, secret, r, nil, nil, recovery); err != nil {
+	saved, err := w.Journal.write(ctx, secret, r, nil, nil, recovery)
+	if err != nil {
 		return
 	}
+	w.observeClaudeRecovery(saved, r.Access.Generation)
 	// Do not publish an observation if a newer adoption or intent won since
 	// the CAS, or if the committed state cannot be verified.
 	committed, current, err := w.load(ctx)
