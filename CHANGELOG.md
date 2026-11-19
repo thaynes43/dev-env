@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.113.0](https://github.com/thaynes43/dev-env/compare/v2.112.0...v2.113.0) (2026-11-19)
+
+
+### Features
+
+* **agentd:** per-generation Claude auth history (DESIGN-069 slice 1, OP930) ([#1233](https://github.com/thaynes43/dev-env/issues/1233)) ([05a6b84](https://github.com/thaynes43/dev-env/commit/05a6b8479daf09642ba00755fd722a0651b766a5))
+* **agentsession:** bounded Claude auth history in status and an opt-in show view (DESIGN-069 slice 2, OP937) ([#1236](https://github.com/thaynes43/dev-env/issues/1236)) ([a73467c](https://github.com/thaynes43/dev-env/commit/a73467cdbeb86ca60d3a56ba0f08389a47149b0f))
+* **keeper:** record Claude refresh provenance in a new journal key (DESIGN-069 slice 3, OP931) ([#1230](https://github.com/thaynes43/dev-env/issues/1230)) ([9b40c55](https://github.com/thaynes43/dev-env/commit/9b40c55145b963c7c9f7c19000d9ca623ed6bcce))
+
+
+### Bug Fixes
+
+* **codexhostpool:** close capacity review findings, round 2 (OP922) ([#1234](https://github.com/thaynes43/dev-env/issues/1234)) ([675396a](https://github.com/thaynes43/dev-env/commit/675396a747841b22ea677189eb6fa779fddf52ab))
+
 ## [2.112.0](https://github.com/thaynes43/dev-env/compare/v2.111.0...v2.112.0) (2026-11-18)
 
 
