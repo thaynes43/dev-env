@@ -24,7 +24,11 @@ organization mismatch records a fixed diagnostic. The consumer history and
 keeper control socket provide no early-refresh trigger.
 
 The private journal's `early-recovery.json` v1 key holds the attempt, cooldown,
-probe observations and early transition evidence. A proved-unsent rollback
+probe observations and early transition evidence. The keeper saves the latest
+observation so a leader restart preserves the last healthy probe before a 401.
+The default cadence adds about 1,440 journal CAS writes per day while Ready.
+Measure that write rate in API server and etcd qualification before enabling
+probes. A proved-unsent rollback
 returns the credential to Ready and keeps the early latch consumed. A saved
 replacement with failed publication retries publication while its access is
 valid. An ambiguous dispatch or refused refresh follows the keeper's existing

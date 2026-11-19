@@ -483,7 +483,11 @@ interval between early attempts across generations. The minimum interval
 also bounds the first verification of a usable replacement. Both durations
 are configurable. The feature defaults off.
 Validate the values against provider limits and the recovery bound before
-live enablement. Classify HTTP 401 separately from the transport's current
+live enablement. Each probe saves its observation with a journal CAS so the
+last healthy probe is available after keeper failover. At the default cadence
+this adds about 1,440 daily CAS writes to the credential journal per active
+keeper. Include that write rate in the API server and etcd measurements for
+qualification. Classify HTTP 401 separately from the transport's current
 generic profile error. A 403, timeout, 429, 5xx, malformed profile or account
 mismatch yields a sanitized diagnostic and cannot qualify an early refresh.
 A successful GET verifies profile

@@ -93,6 +93,8 @@ func TestClaudeEarlyOwnToken401DispatchesOnce(t *testing.T) {
 	f.tick()
 	f.clk.Step(time.Minute)
 	f.w.probeClaude(ctx)
+	// Only the durable journal transfers the last healthy probe to the new leader.
+	f.w = restartEarlyClaude(f)
 	f.clk.Step(time.Minute)
 	f.w.probeClaude(ctx)
 	f.clk.Step(time.Minute)
