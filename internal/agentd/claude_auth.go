@@ -81,6 +81,10 @@ func readClaudeCredentials(s Settings) ([]byte, error) {
 // and seeds oauthAccount. It is idempotent and safe to call every poll. It
 // never runs the CLI and never writes a refresh token.
 func SyncClaudeAccess(s Settings, now time.Time) error {
+	return syncClaudeAccess(s, now, time.Now, writeClaudePrivateAtomic)
+}
+
+func syncClaudeAccess(s Settings, now time.Time, clock func() time.Time, writeCredentials func(string, []byte) error) error {
 	if s.ClaudeLiveFile == "" {
 		return nil
 	}
@@ -146,16 +150,24 @@ func SyncClaudeAccess(s Settings, now time.Time) error {
 		}
 	}
 	credPath := filepath.Join(s.ClaudeConfigDir, credentialsFileName)
+	var writtenAt time.Time
 	if changed {
-		if writeClaudePrivateAtomic(credPath, merged) != nil {
+		if writeCredentials(credPath, merged) != nil {
 			return ErrClaudeAccess
 		}
+		writtenAt = clock().UTC()
 	} else if fi, err := os.Lstat(credPath); err == nil && fi.Mode().Perm() != 0o600 {
 		if os.Chmod(credPath, 0o600) != nil {
 			return ErrClaudeAccess
 		}
 	}
-	if ensureOAuthAccount(s.ClaudeState, oauthAccount{AccountUUID: a.AccountUUID, OrganizationUUID: a.OrganizationUUID}) != nil {
+	confirmedAt := writtenAt
+	if confirmedAt.IsZero() {
+		confirmedAt = clock().UTC()
+	}
+	accountErr := ensureOAuthAccount(s.ClaudeState, oauthAccount{AccountUUID: a.AccountUUID, OrganizationUUID: a.OrganizationUUID})
+	recordClaudeApplied(s, a.Generation, confirmedAt, writtenAt)
+	if accountErr != nil {
 		return ErrClaudeAccess
 	}
 	return nil
