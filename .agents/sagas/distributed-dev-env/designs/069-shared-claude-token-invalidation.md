@@ -501,7 +501,7 @@ A successful GET verifies profile
 access and does not verify consumer inference. A consumer report never
 changes the cadence, triggers a probe or authorizes a refresh.
 [Adoption GET](../../../../internal/keeper/claude_control.go#L282-L289),
-[profile response handling](../../../../internal/keeper/claude_transport.go#L244-L262).
+[profile response handling](../../../../internal/keeper/claude_transport.go#L273-L297).
 
 A keeper-observed 401 qualifies at most one early refresh for the expected
 login incarnation and generation. Re-read the Ready record under the worker's
@@ -548,8 +548,8 @@ Prometheus endpoint exposes probe results, recovery outcomes, open incident,
 hold and unavailable-journal state. The existing login notifier pages for
 `NeedsLogin` and lapses. Ready-state visibility uses metrics while the
 raise-notice activation remains held.
-[Refresh and intent handling](../../../../internal/keeper/claude_worker.go#L149-L225),
-[NeedsLogin](../../../../internal/keeper/claude_worker.go#L415-L432).
+[Refresh and intent handling](../../../../internal/keeper/claude_worker.go#L303-L385),
+[NeedsLogin](../../../../internal/keeper/claude_worker.go#L549-L578).
 
 ## 6. Implementation plan and acceptance
 

@@ -67,7 +67,7 @@ The probe classes, in order from `1` to `9`, are healthy, 401, forbidden, rate
 limited, server error, timeout, malformed profile, account or organization
 mismatch, and unavailable. The page failure classes, in order from `1` to `9`,
 are proved unsent, possibly spent, refresh status rejected, refresh response
-unreadable, invalid refresh response, changed account, recovery deadline, and
+unreadable, invalid refresh response, changed account, recovery deadline,
 flapping, and attempt limit.
 
 ### Prometheus
