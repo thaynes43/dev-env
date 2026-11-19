@@ -134,7 +134,7 @@ func TestShowClaudeAuthHistoryRequiresAcknowledgement(t *testing.T) {
 					}
 					if tc.want == ExitFailed {
 						if h.stdout.Len() != 0 || !strings.Contains(h.stderr.String(), "the operator does not offer the Claude auth history view") {
-							t.Fatalf("unexpected refusal: stdout %q, stderr %q", h.stdout, h.stderr)
+							t.Fatalf("unexpected refusal: stdout %q, stderr %q", h.stdout.String(), h.stderr.String())
 						}
 					} else if !json.Valid(h.stdout.Bytes()) || bytes.Contains(h.stdout.Bytes(), []byte("claudeAuthHistory")) {
 						t.Fatal("acknowledged response without a snapshot did not print a legacy-shaped Session")
