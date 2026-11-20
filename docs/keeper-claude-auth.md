@@ -15,7 +15,7 @@ unexpired Ready token. The settings belong to `dev-env-keeper`.
 | `--enable-claude-early-recovery` | `false` | Enables early recovery when `--enable-claude-auth` and leader election are active. |
 | `--claude-early-probe-interval` | `1m` | Sets the cadence for the keeper's read-only profile GET. Minimum `30s`. |
 | `--claude-early-min-interval` | `5m` | Sets the cooldown across generations and restarts, and the time allowed to verify a replacement. Minimum `2m` and at least twice the probe interval. |
-| `--claude-early-max-attempts-per-day` | `2` | Caps early attempts per login incarnation in a rolling 24 hours. Accepts 1 to 32. Tom's decision on the default is recorded as pending under Q-938-01 in DESIGN-069. |
+| `--claude-early-max-attempts-per-day` | `2` | Caps early attempts per login incarnation in a rolling 24 hours. Accepts 1 to 32. Tom approved the default of 2 on 2026-11-20 in Q-938-01. See [DESIGN-069 §5.4](../.agents/sagas/distributed-dev-env/designs/069-shared-claude-token-invalidation.md#54-keeper-only-early-revocation-recovery). |
 
 A profile 401 can start one attempt for that login and generation. The keeper
 rechecks the journal and its Lease after the GET, then uses the same fenced
@@ -38,9 +38,10 @@ In a hard outage with only diagnostic results, the probe journal writes at
 most one record per 15-minute heartbeat (about 96 per day), plus decision
 transitions. In an intermittent outage that alternates between healthy and
 diagnostic results, it writes on every alternation, up to once per probe
-interval (1,440 per day at a one-minute interval). Before enabling the flag,
-enablement prerequisite 7 requires revisiting this write rate when validating
-the cadence, floor, and cap against provider limits.
+interval (1,440 per day at a one-minute interval or 2,880 at the 30-second
+minimum). Before enabling the flag, include this write rate when validating
+the cadence, floor and cap against provider limits and the recovery bound.
+See [Enablement prerequisites](../.agents/sagas/distributed-dev-env/designs/069-shared-claude-token-invalidation.md#enablement-prerequisites).
 
 The keeper keeps the latest healthy probe in memory. After a restart, the
 last healthy probe before a 401 comes from the last journaled
