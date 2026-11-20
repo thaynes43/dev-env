@@ -491,12 +491,16 @@ are configurable. Require at least 30 seconds between probes and a floor of
 at least two minutes and at least twice the probe interval. The feature
 defaults off. Validate the cadence and floor against provider limits and the
 recovery bound before live enablement. Qualify 401 with a pre-refresh control
-that shows valid access gets 200. Save generation or result transitions, the
-first 401 bracket and incident changes. Between transitions, save at most one
-probe heartbeat per 15 minutes, or 96 writes per day at the default cadence.
+that shows valid access gets 200. Save generation and incident changes, the
+first usable observation, the first 401 bracket, and transitions to or from
+healthy or own-token 401 immediately. Keep the observation that closes an
+incident. Changes among diagnostic results (403, 429, 5xx, timeout, malformed
+profile, account mismatch or unavailable) wait for the heartbeat. The probe
+metric counts every result in its own class. During a provider outage the
+probe journal writes at most once per 15-minute heartbeat (96 per day), plus
+writes for those decision-relevant changes.
 On a generation whose latch is consumed or held, probe at most every 15 minutes.
-A tombstoned login gets no profile GET. Only HTTP 401 qualifies. A 403,
-timeout, 429, 5xx, malformed profile or account mismatch yields a fixed diagnostic.
+A tombstoned login gets no profile GET. Only HTTP 401 qualifies.
 A successful GET verifies profile
 access and does not verify consumer inference. A consumer report never
 changes the cadence, triggers a probe or authorizes a refresh.

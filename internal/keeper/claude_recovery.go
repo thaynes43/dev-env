@@ -149,7 +149,10 @@ func (w *claudeWorker) probeClaude(ctx context.Context) {
 		}
 		return
 	}
-	observation.coalesce(previous)
+	// An incident transition is already a write. Keep the probe that caused it.
+	if attempt.Incident == recovery.Incident {
+		observation.coalesce(previous)
+	}
 	w.recordClaudeRecovery(ctx, current, attempt)
 }
 
