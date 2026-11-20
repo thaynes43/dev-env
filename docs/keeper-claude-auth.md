@@ -26,10 +26,24 @@ organization mismatch records a fixed diagnostic. The consumer history and
 keeper control socket provide no early-refresh trigger.
 
 The private journal's `early-recovery.json` v1 key holds the attempt, cooldown,
-probe observations and early transition evidence. The keeper saves probe
-transitions, the first 401 bracket, and at most one heartbeat per 15 minutes
-between transitions. It keeps the latest healthy probe in memory. After a
-restart, the last healthy probe before a 401 comes from the last journaled
+probe observations and early transition evidence. The keeper saves generation
+and incident changes, the first usable observation, the first 401 bracket, and
+transitions to or from healthy or own-token 401 immediately. Changes among
+diagnostic classes and repeated results wait for the 15-minute heartbeat. Read
+a stored diagnostic as “a diagnostic since T, exact code as of T.” T is the
+recorded observation time. No recovery decision reads the stored diagnostic
+code. The probe metric counts each result in its live class.
+
+In a hard outage with only diagnostic results, the probe journal writes at
+most one record per 15-minute heartbeat (about 96 per day), plus decision
+transitions. In an intermittent outage that alternates between healthy and
+diagnostic results, it writes on every alternation, up to once per probe
+interval (1,440 per day at a one-minute interval). Before enabling the flag,
+enablement prerequisite 7 requires revisiting this write rate when validating
+the cadence, floor, and cap against provider limits.
+
+The keeper keeps the latest healthy probe in memory. After a restart, the
+last healthy probe before a 401 comes from the last journaled
 observation. At the default cadence that can be up to 15 minutes older than
 the last completed healthy probe in steady state. A generation with a
 consumed latch or a hold gets at most one GET every 15 minutes. A tombstoned

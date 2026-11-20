@@ -343,9 +343,13 @@ current, the original publication time remains unknown. The process counter
 `account-mismatch` and `save-unavailable`. Success means the replacement was
 saved to the journal. `save-unavailable` includes a lost acknowledgement after
 a successful save. Slice 6 adds a fixed `trigger` label with `scheduled` and
-`early`. It keeps the latest healthy probe in memory and persists transitions
-and a heartbeat at most once per 15 minutes between transitions. After a
-keeper failover, the last healthy probe in a rejection bracket comes from
+`early`. It saves generation and incident changes, the first usable
+observation, the first 401 bracket, and transitions to or from healthy or
+own-token 401 immediately. Changes among diagnostic classes and repeated
+results wait for the 15-minute heartbeat. Read a stored diagnostic as “a
+diagnostic since T, exact code as of T.” T is its recorded observation time.
+The keeper keeps the latest healthy probe in memory. After a keeper
+failover, the last healthy probe in a rejection bracket comes from
 that heartbeat or the last recorded transition. Its precision can be 15
 minutes coarser at the default cadence.
 
@@ -489,16 +493,25 @@ interval between early attempts across generations. The minimum interval
 also bounds the first verification of a usable replacement. Both durations
 are configurable. Require at least 30 seconds between probes and a floor of
 at least two minutes and at least twice the probe interval. The feature
-defaults off. Validate the cadence and floor against provider limits and the
-recovery bound before live enablement. Qualify 401 with a pre-refresh control
-that shows valid access gets 200. Save generation and incident changes, the
+defaults off. Qualify 401 with a pre-refresh control that shows valid access
+gets 200. Save generation and incident changes, the
 first usable observation, the first 401 bracket, and transitions to or from
 healthy or own-token 401 immediately. Keep the observation that closes an
 incident. Changes among diagnostic results (403, 429, 5xx, timeout, malformed
-profile, account mismatch or unavailable) wait for the heartbeat. The probe
-metric counts every result in its own class. During a provider outage the
-probe journal writes at most once per 15-minute heartbeat (96 per day), plus
-writes for those decision-relevant changes.
+profile, account mismatch or unavailable) wait for the heartbeat. No recovery
+decision reads the stored diagnostic code. The probe metric counts every
+result in its live class.
+
+**2026-11-20 coordinator ruling (dev-env-1118-222802, OP939).** Keep the
+existing coalescing behavior. In a hard outage with only diagnostic results,
+the probe journal writes at most one record per 15-minute heartbeat (about
+96 per day), plus decision transitions. In an intermittent outage that
+alternates between healthy and diagnostic results, it writes on every
+alternation, up to once per probe interval (1,440 per day at a one-minute
+interval). Enablement prerequisite 7 must revisit this write rate when
+validating the cadence, floor, and cap against provider limits and the
+recovery bound before the flag is turned on.
+
 On a generation whose latch is consumed or held, probe at most every 15 minutes.
 A tombstoned login gets no profile GET. Only HTTP 401 qualifies.
 A successful GET verifies profile

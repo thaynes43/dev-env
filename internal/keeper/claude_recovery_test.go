@@ -1038,3 +1038,54 @@ func TestClaudeEarlyConfiguredCadenceSkipsMissedSlots(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestClaudeProbeCoalesceClassPairs(t *testing.T) {
+	classes := []struct {
+		name       string
+		class      claudeProbeClass
+		diagnostic bool
+	}{
+		{"healthy", claudeProbeHealthy, false},
+		{"unauthorized", claudeProbeUnauthorized, false},
+		{"forbidden", claudeProbeForbidden, true},
+		{"rate_limited", claudeProbeRateLimited, true},
+		{"server_error", claudeProbeServerError, true},
+		{"timeout", claudeProbeTimeout, true},
+		{"malformed", claudeProbeMalformed, true},
+		{"account_mismatch", claudeProbeAccountMismatch, true},
+		{"unavailable", claudeProbeUnavailable, true},
+	}
+	observedAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for _, from := range classes {
+		for _, to := range classes {
+			t.Run(from.name+"/"+to.name, func(t *testing.T) {
+				previous := claudeProbeRecord{
+					Generation:  1,
+					ObservedAt:  observedAt.UnixNano(),
+					FirstUsable: observedAt.Add(-2 * time.Minute).UnixNano(),
+					First401:    observedAt.Add(-time.Minute).UnixNano(),
+					Class:       from.class,
+				}
+				fresh := previous
+				fresh.Class = to.class
+				fresh.ObservedAt = observedAt.Add(15*time.Minute - time.Nanosecond).UnixNano()
+				want := fresh
+				if from.class == to.class || (from.diagnostic && to.diagnostic) {
+					want = previous
+				}
+				got := fresh
+				got.coalesce(previous)
+				if got != want {
+					t.Errorf("before heartbeat retained previous record = %t, want %t", got == previous, want == previous)
+				}
+
+				fresh.ObservedAt = observedAt.Add(15 * time.Minute).UnixNano()
+				got = fresh
+				got.coalesce(previous)
+				if got != fresh {
+					t.Error("at the 15-minute heartbeat, want the fresh record")
+				}
+			})
+		}
+	}
+}
