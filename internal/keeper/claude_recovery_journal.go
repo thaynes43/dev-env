@@ -230,10 +230,23 @@ func (s *claudeRecoveryState) observe(generation uint64, at int64, class claudeP
 	return p
 }
 
-// Coalesce timestamps when they are the only change. A first usable probe or
-// first 401 is evidence even if the result class was already recorded.
+// These classes carry diagnostics only. Healthy and own-token 401 inform
+// recovery decisions, so transitions to and from them are saved immediately.
+func (c claudeProbeClass) diagnosticOnly() bool {
+	switch c {
+	case claudeProbeForbidden, claudeProbeRateLimited, claudeProbeServerError, claudeProbeTimeout,
+		claudeProbeMalformed, claudeProbeAccountMismatch, claudeProbeUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Coalesce timestamps and diagnostic-only changes between heartbeats. A first
+// usable probe or first 401 is evidence even if the class was already recorded.
 func (p *claudeProbeRecord) coalesce(previous claudeProbeRecord) {
-	if p.Generation == previous.Generation && p.Class == previous.Class &&
+	if p.Generation == previous.Generation &&
+		(p.Class == previous.Class || (p.Class.diagnosticOnly() && previous.Class.diagnosticOnly())) &&
 		p.FirstUsable == previous.FirstUsable && p.First401 == previous.First401 &&
 		p.ObservedAt-previous.ObservedAt < int64(claudeProbeHeartbeat) {
 		*p = previous

@@ -91,6 +91,7 @@ var claudeDecisionSelectors = map[string]string{
 			state.Incident state.Incident.Held state.Incident.Generation state.IncarnationHigh state.IncarnationLow
 			state.lastProbe state.lastProbe(gen).ObservedAt current.UID ready.Stage ready.Access recovery.IncarnationHigh
 			recovery.IncarnationLow recovery.lastProbe previous.ObservedAt recovery.observe observation.coalesce
+			attempt.Incident recovery.Incident
 			context.WithoutCancel`,
 	"claude_recovery.go:considerEarlyRefresh": `
 			state.Incident state.floor state.addAttempt state.LastAttempt state.CooldownUntil

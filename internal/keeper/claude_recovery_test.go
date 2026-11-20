@@ -441,6 +441,64 @@ func TestClaudeEarlyLostReplacementAcknowledgementRetriesOnlyPublication(t *test
 	}
 }
 
+func TestClaudeEarlyRecordsFirstUsableProbeAfterPublication(t *testing.T) {
+	f := newEarlyClaudeFix(t)
+	f.tick()
+	publisher := &blockedClaudePublication{claudePublisher: f.w.Publisher, blocked: true}
+	f.w.Publisher = publisher
+	f.w.probeClaude(t.Context())
+	f.w.Transport = claudeProbeFixture{f.tr, fakeClaudeProbe(nil)}
+	f.clk.Step(time.Minute)
+	f.w.probeClaude(t.Context())
+	before := f.recovery(t)
+	if p := before.lastProbe(2); before.Incident.Published || p.Class != claudeProbeHealthy || p.FirstUsable != 0 {
+		t.Fatal("fixture did not record a healthy but unpublished successor")
+	}
+
+	publisher.blocked = false
+	f.tick()
+	if !f.recovery(t).Incident.Published || f.liveGeneration(t) != 2 {
+		t.Fatal("fixture did not publish the successor")
+	}
+	f.clk.Step(time.Minute)
+	f.w.probeClaude(t.Context())
+	if got, want := f.recovery(t).lastProbe(2).FirstUsable, f.clk.Now().UnixNano(); got != want {
+		t.Errorf("first usable observation = %d, want %d", got, want)
+	}
+
+	f.clk.Step(DefaultClaudeEarlyInterval - time.Minute)
+	f.tick()
+	if page := f.recovery(t).Incident.Page; page.Delivery != 0 {
+		t.Errorf("recorded a deadline page despite timely verified publication (failure class %d)", page.Failure)
+	}
+}
+
+func TestClaudeEarlyClosingProbeKeepsObservationAtFloor(t *testing.T) {
+	f := newEarlyClaudeFix(t)
+	f.w.probeClaude(t.Context())
+	f.w.Transport = claudeProbeFixture{f.tr, fakeClaudeProbe(nil)}
+	f.clk.Step(time.Minute)
+	f.w.probeClaude(t.Context())
+	before := f.recovery(t)
+	firstUsable := f.clk.Now().UnixNano()
+	if before.Incident.Resolved || before.lastProbe(2).FirstUsable != firstUsable {
+		t.Fatal("fixture did not record a usable successor before the floor")
+	}
+
+	writes := f.c.Patches.Load()
+	f.clk.Step(DefaultClaudeEarlyInterval - time.Minute)
+	f.w.probeClaude(t.Context())
+	after := f.recovery(t)
+	if !after.Incident.Resolved || f.c.Patches.Load()-writes != 1 {
+		t.Fatal("the probe at the floor did not resolve the incident in one write")
+	}
+	atFloor := f.clk.Now().UnixNano()
+	if p := after.lastProbe(2); p.ObservedAt != atFloor || p.LastHealthy != atFloor || p.FirstUsable != firstUsable {
+		t.Fatalf("closing probe observed at %d, last healthy %d, first usable %d; want %d, %d, %d",
+			p.ObservedAt, p.LastHealthy, p.FirstUsable, atFloor, atFloor, firstUsable)
+	}
+}
+
 func TestClaudeEarlyRepeatCutoffRequiresHealthySuccessorThroughFloor(t *testing.T) {
 	for _, flap := range []bool{false, true} {
 		name := "verified healthy at the floor"
@@ -553,6 +611,50 @@ func TestClaudeEarlyCoalescesJournalWrites(t *testing.T) {
 	}
 }
 
+func TestClaudeEarlyCoalescesAlternatingDiagnosticClasses(t *testing.T) {
+	f := newEarlyClaudeFix(t)
+	m := newClaudeEarlyMetrics()
+	f.w.RecoveryMetrics = m
+	probe := func(result error) {
+		f.w.Transport = claudeProbeFixture{f.tr, fakeClaudeProbe(result)}
+		f.w.probeClaude(t.Context())
+	}
+	initialWrites := f.c.Patches.Load()
+	probe(claudeProbeServerError)
+	for range 7 {
+		f.clk.Step(time.Minute)
+		probe(claudeProbeTimeout)
+		f.clk.Step(time.Minute)
+		probe(claudeProbeServerError)
+	}
+	if writes := f.c.Patches.Load() - initialWrites; writes != 1 {
+		t.Fatalf("alternating diagnostics within the heartbeat made %d journal writes, want 1", writes)
+	}
+	serverErrors := claudeMetricValue(t, m.probes.WithLabelValues("server-error"))
+	timeouts := claudeMetricValue(t, m.probes.WithLabelValues("timeout"))
+	if serverErrors != 8 || timeouts != 7 {
+		t.Fatalf("live probe counts = %g server errors and %g timeouts, want 8 and 7", serverErrors, timeouts)
+	}
+
+	f.clk.Step(time.Minute)
+	probe(claudeProbeTimeout)
+	if writes, p := f.c.Patches.Load()-initialWrites, f.recovery(t).lastProbe(1); writes != 2 || p.Class != claudeProbeTimeout || p.ObservedAt != f.clk.Now().UnixNano() {
+		t.Fatalf("the heartbeat did not record the latest diagnostic (total writes %d)", writes)
+	}
+
+	f.w.retryAfter = f.clk.Now().Add(3 * time.Minute) // Keep dispatch out of the write count.
+	f.clk.Step(time.Minute)
+	probe(claudeProbeUnauthorized)
+	if writes, p := f.c.Patches.Load()-initialWrites, f.recovery(t).lastProbe(1); writes != 3 || p.Class != claudeProbeUnauthorized || p.First401 != f.clk.Now().UnixNano() {
+		t.Fatalf("the transition to 401 did not record the rejection immediately (total writes %d)", writes)
+	}
+	f.clk.Step(time.Minute)
+	probe(claudeProbeServerError)
+	if writes, p := f.c.Patches.Load()-initialWrites, f.recovery(t).lastProbe(1); writes != 4 || p.Class != claudeProbeServerError {
+		t.Fatalf("the transition from 401 did not record the diagnostic immediately (total writes %d)", writes)
+	}
+}
+
 func TestClaudeEarlyBacksOffStoppedGenerations(t *testing.T) {
 	for _, stopped := range []string{"consumed", "held", "tombstoned"} {
 		t.Run(stopped, func(t *testing.T) {
@@ -596,6 +698,43 @@ func TestClaudeEarlyBacksOffStoppedGenerations(t *testing.T) {
 				t.Fatal("backoff did not allow only the expected diagnostic and heartbeat")
 			}
 		})
+	}
+}
+
+func TestClaudeEarlyBacksOffConsumedGenerationWhenPatchesFail(t *testing.T) {
+	f := newEarlyClaudeFix(t)
+	f.notSent(nil)
+	f.w.probeClaude(t.Context())
+	before := f.recovery(t)
+	if before.Incident.Generation != 1 || f.journal(t).Stage != claudeReady || f.tr.Attempts != 1 || f.tr.Calls != 0 {
+		t.Fatal("fixture did not consume and roll back the attempt")
+	}
+
+	gets := 0
+	f.w.Transport = claudeProbeFixture{f.tr, func(secretValue) (claudeProfile, error) {
+		gets++
+		return claudeProfile{}, claudeProbeTimeout
+	}}
+	initialPatches := f.c.Patches.Load()
+	f.c.Fail.Store(true)
+	f.clk.Step(claudeProbeHeartbeat)
+	for window := range 2 {
+		beforeGets := gets
+		f.w.probeClaude(t.Context())
+		for range 14 {
+			f.clk.Step(time.Minute)
+			f.w.probeClaude(t.Context())
+		}
+		if got := gets - beforeGets; got != 1 {
+			t.Errorf("profile GETs in failed-write heartbeat window %d = %d, want 1", window+1, got)
+		}
+		f.clk.Step(time.Minute)
+	}
+	if patches := f.c.Patches.Load() - initialPatches; patches != 2 {
+		t.Errorf("failed patch attempts in two heartbeat windows = %d, want 2", patches)
+	}
+	if f.recovery(t).lastProbe(1) != before.lastProbe(1) || f.tr.Attempts != 1 {
+		t.Fatal("the failed writes advanced the durable observation or retried refresh")
 	}
 }
 
@@ -670,6 +809,35 @@ func TestClaudeEarlyVerifiedScheduledRotationClosesStaleIncident(t *testing.T) {
 	f.w.probeClaude(t.Context())
 	if f.tr.Calls != 2 || f.recovery(t).Incident.Held {
 		t.Fatal("an unrelated 401 after verified scheduled rotation was treated as flapping")
+	}
+}
+
+func TestClaudeEarlySuccessorDoesNotInheritScheduledRotation(t *testing.T) {
+	f := newEarlyClaudeFix(t)
+	f.tick()
+	f.clk.Step(6 * time.Hour)
+	f.tick()
+	if f.tr.Calls != 1 || f.liveGeneration(t) != 2 {
+		t.Fatal("fixture did not publish a scheduled successor")
+	}
+	f.w.probeClaude(t.Context())
+	if f.tr.Calls != 2 || f.liveGeneration(t) != 3 || f.recovery(t).Incident.Generation != 2 {
+		t.Fatal("fixture did not publish an early successor to the scheduled rotation")
+	}
+
+	f.clk.Step(time.Minute)
+	f.w.Transport = claudeProbeFixture{f.tr, fakeClaudeProbe(nil)}
+	f.w.probeClaude(t.Context())
+	before := f.recovery(t)
+	if before.Incident.Resolved || before.lastProbe(3).FirstUsable != f.clk.Now().UnixNano() {
+		t.Error("the healthy early successor did not leave the incident open before the floor")
+	}
+
+	f.clk.Step(DefaultClaudeEarlyInterval - time.Minute)
+	f.w.Transport = claudeProbeFixture{f.tr, fakeClaudeProbe(claudeProbeUnauthorized)}
+	f.w.probeClaude(t.Context())
+	if i := f.recovery(t).Incident; f.tr.Calls != 2 || !i.Held || i.Resolved || i.Page.Failure != claudeRecoveryFlapping {
+		t.Errorf("the later 401 did not hold the early successor (refresh calls %d, held %t, resolved %t)", f.tr.Calls, i.Held, i.Resolved)
 	}
 }
 
@@ -869,4 +1037,55 @@ func TestClaudeEarlyConfiguredCadenceSkipsMissedSlots(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestClaudeProbeCoalesceClassPairs(t *testing.T) {
+	classes := []struct {
+		name       string
+		class      claudeProbeClass
+		diagnostic bool
+	}{
+		{"healthy", claudeProbeHealthy, false},
+		{"unauthorized", claudeProbeUnauthorized, false},
+		{"forbidden", claudeProbeForbidden, true},
+		{"rate_limited", claudeProbeRateLimited, true},
+		{"server_error", claudeProbeServerError, true},
+		{"timeout", claudeProbeTimeout, true},
+		{"malformed", claudeProbeMalformed, true},
+		{"account_mismatch", claudeProbeAccountMismatch, true},
+		{"unavailable", claudeProbeUnavailable, true},
+	}
+	observedAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for _, from := range classes {
+		for _, to := range classes {
+			t.Run(from.name+"/"+to.name, func(t *testing.T) {
+				previous := claudeProbeRecord{
+					Generation:  1,
+					ObservedAt:  observedAt.UnixNano(),
+					FirstUsable: observedAt.Add(-2 * time.Minute).UnixNano(),
+					First401:    observedAt.Add(-time.Minute).UnixNano(),
+					Class:       from.class,
+				}
+				fresh := previous
+				fresh.Class = to.class
+				fresh.ObservedAt = observedAt.Add(15*time.Minute - time.Nanosecond).UnixNano()
+				want := fresh
+				if from.class == to.class || (from.diagnostic && to.diagnostic) {
+					want = previous
+				}
+				got := fresh
+				got.coalesce(previous)
+				if got != want {
+					t.Errorf("before heartbeat retained previous record = %t, want %t", got == previous, want == previous)
+				}
+
+				fresh.ObservedAt = observedAt.Add(15 * time.Minute).UnixNano()
+				got = fresh
+				got.coalesce(previous)
+				if got != fresh {
+					t.Error("at the 15-minute heartbeat, want the fresh record")
+				}
+			})
+		}
+	}
 }
