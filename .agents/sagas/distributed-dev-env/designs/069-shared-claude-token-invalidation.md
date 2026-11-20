@@ -508,9 +508,9 @@ the probe journal writes at most one record per 15-minute heartbeat (about
 96 per day), plus decision transitions. In an intermittent outage that
 alternates between healthy and diagnostic results, it writes on every
 alternation, up to once per probe interval (1,440 per day at a one-minute
-interval). Enablement prerequisite 7 must revisit this write rate when
-validating the cadence, floor, and cap against provider limits and the
-recovery bound before the flag is turned on.
+interval or 2,880 at the 30-second minimum). Before enabling early recovery,
+include this write rate when validating the cadence, floor and cap against
+provider limits and the recovery bound. See [Enablement prerequisites](#enablement-prerequisites).
 
 On a generation whose latch is consumed or held, probe at most every 15 minutes.
 A tombstoned login gets no profile GET. Only HTTP 401 qualifies.
@@ -545,11 +545,12 @@ can create another H1 window. Routine scheduling keeps its existing
 eligibility rules and never replays a send that might have spent its refresh
 token.
 
-**Q-938-01, pending before enablement.** Will Tom approve the coordinator's
-default of two early attempts per login incarnation in a rolling 24 hours?
-A third otherwise qualifying 401 sets the hold and records one page. The
-keeper counts committed latches, including proved-unsent attempts, across
-restarts. `--claude-early-max-attempts-per-day` configures the cap.
+**Q-938-01, ruled by Tom 2026-11-20.** Allow two early attempts per login
+incarnation in a rolling 24 hours. A third otherwise qualifying 401 holds
+early recovery until the next login (adoption) and records one page. The
+shipped default already matches the ruling, so no code changed. The keeper
+counts committed latches, including proved-unsent attempts, across restarts.
+`--claude-early-max-attempts-per-day` configures the cap.
 Adoption clears the count and any hold. It preserves the durable floor.
 If the recovery key cannot be decoded, an authorized adoption replaces it
 with fresh v1 state and imposes the full configured floor from adoption.
@@ -568,6 +569,33 @@ raise-notice activation remains held.
 [Refresh and intent handling](../../../../internal/keeper/claude_worker.go#L303-L385),
 [NeedsLogin](../../../../internal/keeper/claude_worker.go#L549-L578).
 
+#### Enablement prerequisites
+
+Meet all eight prerequisites before setting `--enable-claude-early-recovery`.
+
+1. **Met.** [PR 1241](https://github.com/thaynes43/dev-env/pull/1241) (story 939)
+   added the L3 tests for guards A2, B3 and W2.
+2. **Met.** PR 1241 (story 939) recorded the L1 decision to keep journal write
+   coalescing and fixed L2 so the journal keeps the healthy probe that closes
+   an incident.
+3. **Met.** Tom ruled on Q-938-01 on 2026-11-20. The cap is two early
+   attempts per login incarnation in a rolling 24 hours. A third otherwise
+   qualifying 401 holds until the next login and records one page.
+4. **Open.** Deliver an alert for `incident_open`, `flapping_hold` and
+   `journal_unavailable`, for example with a PrometheusRule. Using the held
+   OP919 switch requires its separate release.
+5. **Open.** Pin the keeper image and make any related configuration changes
+   through haynes-ops in a separate story.
+6. **Open.** Check the provider's profile endpoint with a control. Confirm
+   that a valid token gets 200 and only an invalidated token gets 401.
+7. **Open.** Validate cadence, floor and cap against provider limits and the
+   recovery bound in this section. Include the journal write rate in the
+   validation. A hard outage writes about 96 records per day, plus decision
+   transitions. An intermittent outage writes up to 1,440 records per day at
+   a one-minute interval or 2,880 at the 30-second minimum.
+8. **Open.** Obtain separate authorization for any live revocation or refresh
+   test and for the account it uses.
+
 ## 6. Implementation plan and acceptance
 
 Take the slices in the order below. Each needs its own bounded implementation
@@ -584,7 +612,7 @@ suite at a time on two CPUs under `nice -n 19`.
 | 3. Keeper provenance | Add the separate journal Secret key and counters in §5.1. Keep projection documents compatible and record rotation and refresh-expiry presence. | Fake-clock worker cases for adoption, refresh, publication and incomplete observations. Golden bytes preserve `access.json` and `login.json`. An older agentd consumes the projection with the keeper metadata present. The new key strict-decodes only bounded times, booleans and integers. | Source and fixture checks. |
 | 4. CLI 2.1.321 qualification | Qualify on a scratch home with access-only credentials using the S-1 method. Check the file reload and 401 wait, FD rotation and Remote Control eligibility, child descriptor inheritance, an in-process subagent's next request after parent reload, and the source seen by a separate Bash-launched CLI. Check whether local profiles combine a static CLI token with a live projection. | A verification record identifies the pinned version, observations and delivery path qualified for slice 5. Include a pre-refresh control for any revocation test. | **Required before the scratch-home CLI check.** Apply the account and lifecycle gates below. |
 | 5. H1 handoff | After slice 4, use the qualified wait and file delivery, or a separately reviewed FD delivery design. Shorten publication-to-write delay. | Fake-clock tests cover the old request still in flight after merge, CLI write-back of old `claudeAiOauth` during an `mcpOAuth` update, preserving CLI-owned data, account-change refusal, the local static-source guard and at most one continue. Use §5.1 to compare routine-refresh windows after installation. | Installed acceptance is gated below. |
-| 6. Early recovery | Source implementation in [OP938](https://work.haynesnetwork.com/work_packages/938) under Q-927-01. The keeper's probe and recovery are off by default. The private journal's `early-recovery.json` v1 key holds attempt history and undelivered page records. The keeper exposes fixed-class Prometheus metrics. | Fake provider verifies that own-token 401 causes one dispatch. Cover stale probes, scheduled races and verified rotation, non-401 errors, CAS and restart, proved-unsent rollback, family-wide revocation, ambiguous send, publish-only recovery, write and probe bounds, the rolling cap, metrics, adoption repair and one sanitized page. A structural test shows no consumer input reaches the refresh decision. Existing intent, unsent-marker and fence tests pass. | Q-927-01 settles the design choice. Q-938-01 remains pending before enablement. Live enablement and installed acceptance have separate authorization. |
+| 6. Early recovery | Source implementation in [OP938](https://work.haynesnetwork.com/work_packages/938) under Q-927-01. The keeper's probe and recovery are off by default. The private journal's `early-recovery.json` v1 key holds attempt history and undelivered page records. The keeper exposes fixed-class Prometheus metrics. | Fake provider verifies that own-token 401 causes one dispatch. Cover stale probes, scheduled races and verified rotation, non-401 errors, CAS and restart, proved-unsent rollback, family-wide revocation, ambiguous send, publish-only recovery, write and probe bounds, the rolling cap, metrics, adoption repair and one sanitized page. A structural test shows no consumer input reaches the refresh decision. Existing intent, unsent-marker and fence tests pass. | Q-927-01 settles the design choice. Tom ruled on the cap in Q-938-01. Live enablement requires the [enablement prerequisites](#enablement-prerequisites). Live enablement and installed acceptance have separate authorization. |
 | 7. Attributed prevention | Use the established cause from slices 0–3 to select the control in §5.3. Qualify any access or transport change before delivery. | Show the attributed action cannot cut off another authorized consumer with the guard in place. Show ordinary inference, bridge lifecycle and keeper rotation still work. Leave this slice pending when attribution or authorized proof is missing. | Explicit approval for any live test that exercises a login, logout, revoke or comparable lifecycle action. |
 
 Use a separately authorized account for any test login or installed
