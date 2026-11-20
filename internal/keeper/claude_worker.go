@@ -27,6 +27,8 @@ type ClaudeOptions struct {
 	// LoginDir is the memory-backed directory the login helper shares with the
 	// keeper; the keeper serves its private control socket there (increment 5).
 	LoginDir string
+	// EarlyRecovery probes only the keeper's own Ready credential. Default off.
+	EarlyRecovery ClaudeEarlyRecoveryOptions
 }
 
 const claudePollInterval = 30 * time.Second
@@ -68,8 +70,12 @@ type claudeWorker struct {
 	// Obs receives the journal's state for the login gauges and the notifier;
 	// nil keeps the worker as it was.
 	Obs *LoginHub
-	// Outcomes counts scheduled refresh outcomes by a fixed class.
+	// Outcomes counts refresh outcomes by a fixed class and trigger.
 	Outcomes *prometheus.CounterVec
+	// EarlyRecovery is immutable after construction.
+	EarlyRecovery   ClaudeEarlyRecoveryOptions
+	RecoveryMetrics *claudeEarlyMetrics
+	probeMemory     claudeProbeMemory // owned by the probe goroutine
 
 	// mu serializes a refresh tick with every control request, so an adoption
 	// never overlaps a refresh in flight. Everything below is guarded by it.
@@ -113,6 +119,18 @@ func (w *claudeWorker) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	if w.EarlyRecovery.Enabled {
+		probeCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			w.runClaudeProbes(probeCtx)
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
+	}
 	for ctx.Err() == nil {
 		w.tick(ctx)
 		select {
@@ -155,9 +173,13 @@ func (w *claudeWorker) tick(ctx context.Context) {
 	defer w.mu.Unlock()
 	secret, r, err := w.load(ctx)
 	if err != nil {
+		if m := w.RecoveryMetrics; m != nil {
+			m.unavailable.Set(1)
+		}
 		w.note("journal-unavailable")
 		return
 	}
+	w.observeClaudeRecovery(secret, r.Access.Generation)
 	if r.Stage != claudeIntent {
 		w.observe(ctx, string(secret.UID), r)
 	}
@@ -198,7 +220,8 @@ func (w *claudeWorker) tick(ctx context.Context) {
 		w.note("needs-login")
 		return
 	}
-	if w.due(r) && !w.Clock.Now().Before(w.retryAfter) {
+	secret, publicationPending := w.reconcileClaudeRecovery(ctx, secret, r)
+	if !publicationPending && w.due(r) && !w.Clock.Now().Before(w.retryAfter) {
 		if secret, r, err = w.refresh(ctx); err != nil {
 			return
 		}
@@ -206,7 +229,11 @@ func (w *claudeWorker) tick(ctx context.Context) {
 		// fence and the publisher each carry their own 2 s timeout.
 		ctx = context.WithoutCancel(ctx)
 	}
-	if w.published == r.Access.Generation {
+	w.publishClaudeReady(ctx, secret, r)
+}
+
+func (w *claudeWorker) publishClaudeReady(ctx context.Context, secret *corev1.Secret, r claudeRecord) {
+	if w.published == r.Access.Generation && !w.earlyPublicationPending(secret, r.Access.Generation) {
 		w.note("ready")
 		return
 	}
@@ -228,6 +255,9 @@ func (w *claudeWorker) publish(ctx context.Context, secret *corev1.Secret, r cla
 		return "publish-failed"
 	}
 	w.published = r.Access.Generation
+	if w.EarlyRecovery.Enabled {
+		w.confirmEarlyPublication(ctx, secret, r.Access.Generation, written)
+	}
 	if written {
 		w.recordClaudePublication(ctx, secret, r.Access.Generation, claudeObservedTime(w.Clock.Now()))
 	}
@@ -256,19 +286,15 @@ func (w *claudeWorker) recordClaudePublication(ctx context.Context, secret *core
 func newClaudeRefreshOutcomes() *prometheus.CounterVec {
 	c := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "dev_env_keeper_claude_refresh_outcomes_total",
-		Help: "Scheduled Claude refresh outcomes after entering the transport, by fixed class. Success means the replacement was saved. " +
+		Help: "Claude refresh outcomes after entering the transport, by fixed class and trigger. Success means the replacement was saved. " +
 			"The save-unavailable class includes a lost acknowledgement after a successful save.",
-	}, []string{"outcome"})
-	for _, outcome := range []string{"success", "not-sent", "possibly-spent", "status", "read", "invalid", "account-mismatch", "save-unavailable"} {
-		c.WithLabelValues(outcome)
+	}, []string{"outcome", "trigger"})
+	for _, trigger := range []string{"scheduled", "early"} {
+		for _, outcome := range []string{"success", "not-sent", "possibly-spent", "status", "read", "invalid", "account-mismatch", "save-unavailable"} {
+			c.WithLabelValues(outcome, trigger)
+		}
 	}
 	return c
-}
-
-func (w *claudeWorker) countRefreshOutcome(outcome string) {
-	if w.Outcomes != nil {
-		w.Outcomes.WithLabelValues(outcome).Inc()
-	}
 }
 
 // refresh performs one journaled refresh and returns the Ready record that
@@ -280,6 +306,15 @@ func (w *claudeWorker) refresh(ctx context.Context) (*corev1.Secret, claudeRecor
 		w.note("journal-unavailable")
 		return nil, claudeRecord{}, errClaudeJournal
 	}
+	if w.EarlyRecovery.Enabled && (!w.due(prev) || (w.earlyPublicationPending(secret, prev.Access.Generation) && w.Clock.Now().Before(prev.Access.ExpiresAt))) {
+		return secret, prev, nil
+	}
+	return w.dispatchClaudeRefresh(ctx, secret, prev, nil)
+}
+
+// dispatchClaudeRefresh is the only refresh POST path. Both callers hold mu.
+// An early caller also checked this exact Ready snapshot against its own probe.
+func (w *claudeWorker) dispatchClaudeRefresh(ctx context.Context, secret *corev1.Secret, prev claudeRecord, early *claudeRecoveryState) (*corev1.Secret, claudeRecord, error) {
 	journalUID := string(secret.UID)
 	floor, err := w.Publisher.generation(ctx)
 	if err != nil {
@@ -298,8 +333,22 @@ func (w *claudeWorker) refresh(ctx context.Context) (*corev1.Secret, claudeRecor
 	}
 	intent := prev
 	intent.Stage, intent.AttemptUID = claudeIntent, string(uuid.NewUUID())
-	// The intent and its unsent marker are one compare-and-swap.
-	if w.Journal.saveIntent(ctx, secret, intent) != nil {
+	var latch []byte
+	trigger := "scheduled"
+	if early != nil {
+		latch = early.encode()
+		if latch == nil || !claudeProbeAccessUsable(prev.Access, w.Clock.Now()) {
+			return nil, claudeRecord{}, errClaudeRecoveryJournal
+		}
+		trigger = "early"
+	}
+	countOutcome := func(outcome string) {
+		if w.Outcomes != nil {
+			w.Outcomes.WithLabelValues(outcome, trigger).Inc()
+		}
+	}
+	// The intent, unsent marker and early latch are one compare-and-swap.
+	if w.Journal.saveIntent(ctx, secret, intent, latch) != nil {
 		// A lost acknowledgement may still have stored the intent.
 		w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID)
 		return nil, claudeRecord{}, errClaudeJournal
@@ -336,7 +385,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (*corev1.Secret, claudeRecor
 	resp, err := w.Transport.refresh(requestCtx, prev.Refresh, prev.Access.Scopes, commit)
 	if err != nil {
 		phase, class := claudeFailureLabels(err)
-		w.countRefreshOutcome(class)
+		countOutcome(class)
 		w.Log.Info("claude refresh failed", "phase", phase, "class", class, "duration_ms", time.Since(started).Milliseconds())
 		if errors.Is(err, errClaudeNotSent) {
 			if w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID) {
@@ -344,7 +393,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (*corev1.Secret, claudeRecor
 			}
 			return nil, claudeRecord{}, errClaudeRefresh
 		}
-		w.needsLogin(context.WithoutCancel(ctx), intent.AttemptUID)
+		w.needsLoginAfter(context.WithoutCancel(ctx), intent.AttemptUID, claudeRefreshFailure(err))
 		return nil, claudeRecord{}, errClaudeRefresh
 	}
 	respondedAt := w.Clock.Now()
@@ -354,16 +403,16 @@ func (w *claudeWorker) refresh(ctx context.Context) (*corev1.Secret, claudeRecor
 	// publish) carries its own 2 s timeout, which bounds the whole.
 	ctx = context.WithoutCancel(ctx)
 	if resp.AccountUUID != "" && resp.AccountUUID != prev.Access.AccountUUID {
-		w.countRefreshOutcome("account-mismatch")
+		countOutcome("account-mismatch")
 		w.Log.Info("claude refresh failed", "phase", "validate", "class", "account-mismatch", "duration_ms", time.Since(started).Milliseconds())
-		w.needsLogin(ctx, intent.AttemptUID)
+		w.needsLoginAfter(ctx, intent.AttemptUID, claudeRecoveryAccountMismatch)
 		return nil, claudeRecord{}, errClaudeAccount
 	}
 	next, err := applyClaudeRefresh(prev, resp, gen, respondedAt)
 	if err != nil || next.Access.Validate(w.Clock.Now()) != nil {
-		w.countRefreshOutcome("invalid")
+		countOutcome("invalid")
 		w.Log.Info("claude refresh failed", "phase", "validate", "class", "invalid", "duration_ms", time.Since(started).Milliseconds())
-		w.needsLogin(ctx, intent.AttemptUID)
+		w.needsLoginAfter(ctx, intent.AttemptUID, claudeRecoveryInvalid)
 		return nil, claudeRecord{}, errClaudeRefresh
 	}
 	// The replacement is stored BEFORE anything is published, and with no Lease
@@ -382,13 +431,23 @@ func (w *claudeWorker) refresh(ctx context.Context) (*corev1.Secret, claudeRecor
 		// tombstone the attempt now.
 		committed = secret
 	}
-	saved, err := w.Journal.saveTransition(ctx, committed, prev.Access.Generation, next, claudeTransition{
+	transition := claudeTransition{
 		Operation: claudeScheduledRefresh, AccessExpirySource: claudeResponseExpiry,
 		DispatchedAt: dispatchedAt, RespondedAt: claudeObservedTime(respondedAt),
 		RefreshRotated: next.Refresh != prev.Refresh, RefreshExpiryPresent: resp.RefreshExpiryPresent,
-	})
+	}
+	if early != nil {
+		transition.Operation = claudeEarlyRefresh
+	} else if w.EarlyRecovery.Enabled {
+		// A routine rotation after an early one still belongs to the
+		// same login, even though the early row is in the separate key.
+		if state, ok := loadClaudeRecovery(committed, prev.Access.Generation); ok {
+			transition.IncarnationHigh, transition.IncarnationLow = state.IncarnationHigh, state.IncarnationLow
+		}
+	}
+	saved, err := w.Journal.saveTransition(ctx, committed, prev.Access.Generation, next, transition, early)
 	if err != nil {
-		w.countRefreshOutcome("save-unavailable")
+		countOutcome("save-unavailable")
 		if noCommit {
 			w.needsLogin(ctx, intent.AttemptUID)
 		} else {
@@ -397,7 +456,8 @@ func (w *claudeWorker) refresh(ctx context.Context) (*corev1.Secret, claudeRecor
 		w.note("journal-unavailable")
 		return nil, claudeRecord{}, errClaudeJournal
 	}
-	w.countRefreshOutcome("success")
+	countOutcome("success")
+	w.observeClaudeRecovery(saved, next.Access.Generation)
 	w.note("refreshed")
 	w.observe(ctx, string(secret.UID), next)
 	return saved, next, nil
@@ -478,12 +538,21 @@ func (w *claudeWorker) abandon(ctx context.Context, journalUID string, ready cla
 	if err != nil || string(secret.UID) != journalUID || r.Stage != claudeIntent || r.AttemptUID != uid || w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
 		return false
 	}
-	return w.Journal.save(ctx, secret, ready) == nil
+	recovery := w.claudeRecoveryFailureData(secret, ready.Access.Generation, claudeRecoveryNotSent)
+	saved, err := w.Journal.write(ctx, secret, ready, nil, nil, recovery)
+	if err == nil {
+		w.observeClaudeRecovery(saved, ready.Access.Generation)
+	}
+	return err == nil
 }
 
 // needsLogin tombstones an interrupted attempt: the stage becomes NeedsLogin
 // and the refresh credential, which may be spent, is dropped.
 func (w *claudeWorker) needsLogin(ctx context.Context, uid string) {
+	w.needsLoginAfter(ctx, uid, claudeRecoveryPossiblySpent)
+}
+
+func (w *claudeWorker) needsLoginAfter(ctx context.Context, uid string, failure claudeRecoveryFailure) {
 	if uid == "" || w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
 		return
 	}
@@ -492,9 +561,12 @@ func (w *claudeWorker) needsLogin(ctx context.Context, uid string) {
 		return
 	}
 	r.Stage, r.AttemptUID, r.Refresh, r.RefreshExpiresAt = claudeNeedsLogin, "", secretValue{}, time.Time{}
-	if w.Journal.save(ctx, secret, r) != nil {
+	recovery := w.claudeRecoveryFailureData(secret, r.Access.Generation, failure)
+	saved, err := w.Journal.write(ctx, secret, r, nil, nil, recovery)
+	if err != nil {
 		return
 	}
+	w.observeClaudeRecovery(saved, r.Access.Generation)
 	// Do not publish an observation if a newer adoption or intent won since
 	// the CAS, or if the committed state cannot be verified.
 	committed, current, err := w.load(ctx)
@@ -521,12 +593,13 @@ func claudeRunnable(o Options, c client.Client, fence *LeaseFence, clk clock.Clo
 		a.LoginDir = DefaultClaudeLoginDir
 	}
 	return &claudeWorker{
-		LoginDir:  a.LoginDir,
-		Journal:   &claudeJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: a.JournalSecret}},
-		Transport: newClaudeHTTPRefresh(),
-		Publisher: &claudePublicSecret{Client: c, Secret: types.NamespacedName{Namespace: o.GHTokenSecret.Namespace, Name: a.LiveSecret}},
-		Fence:     fence.CheckBudget,
-		Clock:     clk,
-		Log:       o.Log.WithName("claude-auth"),
+		EarlyRecovery: a.EarlyRecovery,
+		LoginDir:      a.LoginDir,
+		Journal:       &claudeJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: a.JournalSecret}},
+		Transport:     newClaudeHTTPRefresh(),
+		Publisher:     &claudePublicSecret{Client: c, Secret: types.NamespacedName{Namespace: o.GHTokenSecret.Namespace, Name: a.LiveSecret}},
+		Fence:         fence.CheckBudget,
+		Clock:         clk,
+		Log:           o.Log.WithName("claude-auth"),
 	}
 }

@@ -545,6 +545,9 @@ removed the variable from a Codex session's environment. Exit 0 is fine, 1 is ex
 login's own roughly 30-day lifetime lives with the keeper and is not in the
 projection.
 
+The keeper's optional own-token probe and incident record are described in
+[Keeper-owned Claude authentication](keeper-claude-auth.md).
+
 ### Start a bounded coordinator on a tracker item
 
 Source contract: [DESIGN-060 section 7.2](../.agents/sagas/distributed-dev-env/designs/060-meatball-front-door.md#72-coordinator-cli-contract-op527-2026-11-10).

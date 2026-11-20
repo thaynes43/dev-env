@@ -88,6 +88,7 @@ type failPatchClient struct {
 	Name      string
 	Fail      atomic.Bool
 	Gets      atomic.Int32 // Gets of the named Secret so far
+	Patches   atomic.Int32 // Patches of the named Secret so far
 	FailGetAt int32        // fail that numbered Get of the named Secret (0: none)
 }
 
@@ -99,8 +100,11 @@ func (c *failPatchClient) Get(ctx context.Context, key client.ObjectKey, obj cli
 }
 
 func (c *failPatchClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-	if c.Fail.Load() && obj.GetName() == c.Name {
-		return errors.New("synthetic patch failure")
+	if obj.GetName() == c.Name {
+		c.Patches.Add(1)
+		if c.Fail.Load() {
+			return errors.New("synthetic patch failure")
+		}
 	}
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }

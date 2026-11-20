@@ -90,6 +90,33 @@ type claudeProfile struct {
 	RateLimitTier    string
 }
 
+type claudeProbeClass uint8
+
+const (
+	claudeProbeHealthy claudeProbeClass = iota + 1
+	claudeProbeUnauthorized
+	claudeProbeForbidden
+	claudeProbeRateLimited
+	claudeProbeServerError
+	claudeProbeTimeout
+	claudeProbeMalformed
+	claudeProbeAccountMismatch
+	claudeProbeUnavailable
+)
+
+// Adoption keeps its existing generic error. The keeper's own probe can use
+// the class without exposing a response body, URL or provider error.
+func (claudeProbeClass) Error() string { return errClaudeProfile.Error() }
+func (claudeProbeClass) Unwrap() error { return errClaudeProfile }
+
+func claudeProfileRequestError(err error) error {
+	var nerr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &nerr) && nerr.Timeout()) {
+		return claudeProbeTimeout
+	}
+	return errClaudeProfile
+}
+
 type claudeRefreshTransport interface {
 	// refresh sends at most one refresh request. It runs every check that can
 	// prove the request unsent, then calls commit immediately before the
@@ -253,15 +280,27 @@ func (t *claudeHTTPRefresh) profile(ctx context.Context, access secretValue) (cl
 	req.Header.Set("Authorization", "Bearer "+access.Reveal())
 	resp, err := t.Client.Do(req)
 	if err != nil {
-		return claudeProfile{}, errClaudeProfile
+		return claudeProfile{}, claudeProfileRequestError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return claudeProfile{}, claudeProbeUnauthorized
+	case resp.StatusCode == http.StatusForbidden:
+		return claudeProfile{}, claudeProbeForbidden
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return claudeProfile{}, claudeProbeRateLimited
+	case resp.StatusCode >= 500 && resp.StatusCode < 600:
+		return claudeProfile{}, claudeProbeServerError
+	case resp.StatusCode != http.StatusOK:
 		return claudeProfile{}, errClaudeProfile
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, claudeauth.MaxBytes+1))
-	if err != nil || len(data) > claudeauth.MaxBytes {
-		return claudeProfile{}, errClaudeProfile
+	if err != nil {
+		return claudeProfile{}, claudeProfileRequestError(err)
+	}
+	if len(data) > claudeauth.MaxBytes {
+		return claudeProfile{}, claudeProbeMalformed
 	}
 	var w struct {
 		Account struct {
@@ -274,10 +313,10 @@ func (t *claudeHTTPRefresh) profile(ctx context.Context, access secretValue) (cl
 		} `json:"organization"`
 	}
 	if codexauth.DecodeTolerant(data, &w) != nil || !claudeField(w.Account.UUID) || !claudeField(w.Organization.UUID) {
-		return claudeProfile{}, errClaudeProfile
+		return claudeProfile{}, claudeProbeMalformed
 	}
 	if w.Organization.Tier != "" && !claudeField(w.Organization.Tier) {
-		return claudeProfile{}, errClaudeProfile
+		return claudeProfile{}, claudeProbeMalformed
 	}
 	return claudeProfile{AccountUUID: w.Account.UUID, OrganizationUUID: w.Organization.UUID, SubscriptionType: claudeSubscription(w.Organization.Type), RateLimitTier: w.Organization.Tier}, nil
 }

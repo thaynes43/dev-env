@@ -307,14 +307,28 @@ func (w *claudeWorker) adopt(ctx context.Context, id string) claudelogin.Respons
 	// One compare-and-swap on the resourceVersion read above: a newer leader's
 	// write makes it conflict and nothing is overwritten.
 	high, low := newClaudeIncarnation()
+	var recovery *claudeRecoveryState
+	if w.EarlyRecovery.Enabled && len(secret.Data[claudeRecoveryKey]) != 0 {
+		state, ok := loadClaudeRecovery(secret, prev.Access.Generation)
+		if !ok {
+			// The old floor is unreadable. Wait a full configured interval
+			// after adoption before allowing another early attempt.
+			now := w.Clock.Now()
+			state = claudeRecoveryState{Version: 1, LastAttempt: claudeObservedTime(now),
+				CooldownUntil: claudeObservedTime(now.Add(w.EarlyRecovery.MinInterval))}
+		}
+		recovery = &state
+	}
 	saved, err := w.Journal.saveTransition(ctx, secret, prev.Access.Generation, next, claudeTransition{
 		IncarnationHigh: high, IncarnationLow: low,
 		Operation: claudeAdoption, AccessExpirySource: claudeStagedExpiry,
 		DispatchedAt: dispatchedAt, RespondedAt: respondedAt,
-	})
+	}, recovery)
 	if err != nil {
 		return unavailable
 	}
+	w.observeClaudeRecovery(secret, prev.Access.Generation)
+	w.observeClaudeRecovery(saved, gen)
 	w.note("adopted")
 	w.observe(ctx, string(secret.UID), next)
 	// Adoption is durable even if publication is unavailable now; the next tick

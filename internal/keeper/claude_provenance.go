@@ -25,7 +25,7 @@ type claudeOperation uint8
 const (
 	claudeAdoption         claudeOperation = 1
 	claudeScheduledRefresh claudeOperation = 2
-	// Operation code 3 is reserved for keeper-only early recovery.
+	claudeEarlyRefresh     claudeOperation = 3 // early-recovery.json only
 )
 
 type claudeExpirySource uint8
@@ -59,6 +59,11 @@ type claudeProvenance struct {
 	Transitions []claudeTransition `json:"transitions"` // oldest first
 }
 
+func (t claudeTransition) validObservations() bool {
+	return t.DispatchedAt >= 0 && t.RespondedAt >= 0 && t.PublishedAt >= 0 && t.AccessExpiresAt >= 0 &&
+		t.AccessLifetime > 0 && t.AccessLifetime <= int64(claudeMaxLifetime)
+}
+
 func claudeObservedTime(t time.Time) int64 {
 	if !t.After(claudeEpoch) || t.After(time.Unix(0, math.MaxInt64)) {
 		return 0
@@ -81,8 +86,7 @@ func (p claudeProvenance) valid() bool {
 	}
 	var prev uint64
 	for _, t := range p.Transitions {
-		if t.Generation <= prev || t.DispatchedAt < 0 || t.RespondedAt < 0 || t.PublishedAt < 0 || t.AccessExpiresAt < 0 ||
-			t.AccessLifetime <= 0 || t.AccessLifetime > int64(claudeMaxLifetime) {
+		if t.Generation <= prev || !t.validObservations() {
 			return false
 		}
 		switch t.Operation {

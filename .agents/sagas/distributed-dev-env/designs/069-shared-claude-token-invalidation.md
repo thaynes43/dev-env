@@ -342,7 +342,12 @@ current, the original publication time remains unknown. The process counter
 `success`, `not-sent`, `possibly-spent`, `status`, `read`, `invalid`,
 `account-mismatch` and `save-unavailable`. Success means the replacement was
 saved to the journal. `save-unavailable` includes a lost acknowledgement after
-a successful save. Probe and early-recovery observations belong to slice 6.
+a successful save. Slice 6 adds a fixed `trigger` label with `scheduled` and
+`early`. It keeps the latest healthy probe in memory and persists transitions
+and a heartbeat at most once per 15 minutes between transitions. After a
+keeper failover, the last healthy probe in a rejection bracket comes from
+that heartbeat or the last recorded transition. Its precision can be 15
+minutes coarser at the default cadence.
 
 Agentd records source kind (projection, static environment, pod-owned or
 unknown), a local launch identifier, the applied generation and the actual
@@ -476,19 +481,27 @@ attributed cause (§5.3), and evidence that lets an investigator explain the
 next cutoff (§5.1). This ruling determines the design direction. Live checks
 and rollout have separate authorization.
 
-Have the elected keeper verify its own current, unexpired Ready access token
-on a fixed cadence with the same read-only profile GET used at adoption.
-Start qualification in slice 6 with a one-minute probe cadence and a
-five-minute minimum interval between early attempts across generations.
-Validate the values against provider limits and the recovery bound before
-live enablement. Classify HTTP 401 separately from the transport's current
-generic profile error. A 403, timeout, 429, 5xx, malformed profile or account
-mismatch yields a sanitized diagnostic and cannot qualify an early refresh.
+Have the elected keeper verify its own current Ready access token on a fixed
+cadence with the same read-only profile GET used at adoption. Skip the GET
+when the token expires within the keeper's refresh request budget.
+Slice 6 defaults to a one-minute probe cadence and a five-minute minimum
+interval between early attempts across generations. The minimum interval
+also bounds the first verification of a usable replacement. Both durations
+are configurable. Require at least 30 seconds between probes and a floor of
+at least two minutes and at least twice the probe interval. The feature
+defaults off. Validate the cadence and floor against provider limits and the
+recovery bound before live enablement. Qualify 401 with a pre-refresh control
+that shows valid access gets 200. Save generation or result transitions, the
+first 401 bracket and incident changes. Between transitions, save at most one
+probe heartbeat per 15 minutes, or 96 writes per day at the default cadence.
+On a generation whose latch is consumed or held, probe at most every 15 minutes.
+A tombstoned login gets no profile GET. Only HTTP 401 qualifies. A 403,
+timeout, 429, 5xx, malformed profile or account mismatch yields a fixed diagnostic.
 A successful GET verifies profile
 access and does not verify consumer inference. A consumer report never
 changes the cadence, triggers a probe or authorizes a refresh.
 [Adoption GET](../../../../internal/keeper/claude_control.go#L282-L289),
-[profile response handling](../../../../internal/keeper/claude_transport.go#L244-L262).
+[profile response handling](../../../../internal/keeper/claude_transport.go#L273-L297).
 
 A keeper-observed 401 qualifies at most one early refresh for the expected
 login incarnation and generation. Re-read the Ready record under the worker's
@@ -508,21 +521,35 @@ is rejected before it has verified healthy through the minimum interval,
 hold further early refreshes and page Tom. The floor alone must never allow
 a second dispatch for the same generation or re-arm a flapping login. A
 healthy replacement verified through the interval closes a successful
-recovery. A flapping hold requires Tom's decision after attribution or a
-separately authorized keeper login. Each early refresh can create another
-H1 window. Routine scheduling keeps its existing eligibility rules and never
-replays a send that might have spent its refresh token.
+recovery. A published scheduled rotation verified healthy also closes an
+open incident when the login is free of a hold. A hold requires Tom's decision
+after attribution or a separately authorized keeper login. Each early refresh
+can create another H1 window. Routine scheduling keeps its existing
+eligibility rules and never replays a send that might have spent its refresh
+token.
+
+**Q-938-01, pending before enablement.** Will Tom approve the coordinator's
+default of two early attempts per login incarnation in a rolling 24 hours?
+A third otherwise qualifying 401 sets the hold and records one page. The
+keeper counts committed latches, including proved-unsent attempts, across
+restarts. `--claude-early-max-attempts-per-day` configures the cap.
+Adoption clears the count and any hold. It preserves the durable floor.
+If the recovery key cannot be decoded, an authorized adoption replaces it
+with fresh v1 state and imposes the full configured floor from adoption.
 
 If the family was revoked and the refresh credential is rejected, preserve
 today's tombstone and `NeedsLogin` path. Preserve the same path for an
 ambiguous spent-token attempt and the existing rollback for a proved-unsent
 attempt. An early attempt that also fails, a replacement that cannot be made
-usable within the qualified recovery bound, or a flapping hold pages Tom once
-per unresolved incident via the keeper paging path. Include UTC time,
-generation, fixed failure class and the incident reference. Keep delivery
-state visible if paging fails. No automatic login ceremony follows.
-[Refresh and intent handling](../../../../internal/keeper/claude_worker.go#L149-L225),
-[NeedsLogin](../../../../internal/keeper/claude_worker.go#L415-L432).
+usable within the qualified recovery bound, or a hold records one page per
+unresolved incident. The private journal stores UTC time, generation, fixed
+failure class, incident reference and undelivered status. The keeper's
+Prometheus endpoint exposes probe results, recovery outcomes, open incident,
+hold and unavailable-journal state. The existing login notifier pages for
+`NeedsLogin` and lapses. Ready-state visibility uses metrics while the
+raise-notice activation remains held.
+[Refresh and intent handling](../../../../internal/keeper/claude_worker.go#L303-L385),
+[NeedsLogin](../../../../internal/keeper/claude_worker.go#L549-L578).
 
 ## 6. Implementation plan and acceptance
 
@@ -540,7 +567,7 @@ suite at a time on two CPUs under `nice -n 19`.
 | 3. Keeper provenance | Add the separate journal Secret key and counters in §5.1. Keep projection documents compatible and record rotation and refresh-expiry presence. | Fake-clock worker cases for adoption, refresh, publication and incomplete observations. Golden bytes preserve `access.json` and `login.json`. An older agentd consumes the projection with the keeper metadata present. The new key strict-decodes only bounded times, booleans and integers. | Source and fixture checks. |
 | 4. CLI 2.1.321 qualification | Qualify on a scratch home with access-only credentials using the S-1 method. Check the file reload and 401 wait, FD rotation and Remote Control eligibility, child descriptor inheritance, an in-process subagent's next request after parent reload, and the source seen by a separate Bash-launched CLI. Check whether local profiles combine a static CLI token with a live projection. | A verification record identifies the pinned version, observations and delivery path qualified for slice 5. Include a pre-refresh control for any revocation test. | **Required before the scratch-home CLI check.** Apply the account and lifecycle gates below. |
 | 5. H1 handoff | After slice 4, use the qualified wait and file delivery, or a separately reviewed FD delivery design. Shorten publication-to-write delay. | Fake-clock tests cover the old request still in flight after merge, CLI write-back of old `claudeAiOauth` during an `mcpOAuth` update, preserving CLI-owned data, account-change refusal, the local static-source guard and at most one continue. Use §5.1 to compare routine-refresh windows after installation. | Installed acceptance is gated below. |
-| 6. Early recovery | After slices 1–3 provide evidence surfaces, implement §5.4 under Q-927-01. Measure the chosen probe cadence and floor with fixtures before rollout. | Fake provider verifies that own-token 401 causes one dispatch. Exercise stale probes and scheduled races, non-401 errors, CAS and restart, proved-unsent rollback, family-wide revocation, ambiguous send, publish-only recovery, repeat cutoff reaching the floor and one sanitized page. A structural test shows no consumer input reaches the refresh decision. Existing intent, unsent-marker and fence tests pass. | Q-927-01 settles the design choice. Live enablement and installed acceptance have separate authorization. |
+| 6. Early recovery | Source implementation in [OP938](https://work.haynesnetwork.com/work_packages/938) under Q-927-01. The keeper's probe and recovery are off by default. The private journal's `early-recovery.json` v1 key holds attempt history and undelivered page records. The keeper exposes fixed-class Prometheus metrics. | Fake provider verifies that own-token 401 causes one dispatch. Cover stale probes, scheduled races and verified rotation, non-401 errors, CAS and restart, proved-unsent rollback, family-wide revocation, ambiguous send, publish-only recovery, write and probe bounds, the rolling cap, metrics, adoption repair and one sanitized page. A structural test shows no consumer input reaches the refresh decision. Existing intent, unsent-marker and fence tests pass. | Q-927-01 settles the design choice. Q-938-01 remains pending before enablement. Live enablement and installed acceptance have separate authorization. |
 | 7. Attributed prevention | Use the established cause from slices 0–3 to select the control in §5.3. Qualify any access or transport change before delivery. | Show the attributed action cannot cut off another authorized consumer with the guard in place. Show ordinary inference, bridge lifecycle and keeper rotation still work. Leave this slice pending when attribution or authorized proof is missing. | Explicit approval for any live test that exercises a login, logout, revoke or comparable lifecycle action. |
 
 Use a separately authorized account for any test login or installed
@@ -565,12 +592,18 @@ An older operator strictly decodes the snapshot and drops reports with
 unknown fields, leaving the last usable snapshot and its report time in place.
 Roll back slice 3 by reverting the keeper image pin. Older keepers ignore and
 preserve `refresh-provenance.json`.
-Roll back early recovery by disabling it.
-Preserve in-flight intent handling and the current refresh credential
-through rollback. Do not restart running sessions as a proof step.
+Roll back slice 6 by disabling `--enable-claude-early-recovery`. A keeper
+image rollback also preserves the separate `early-recovery.json` v1 key.
+The older keeper leaves that key in place on adoption, scheduled refresh
+and publication, so its early rows and cooldown survive roll-forward. Its
+publication of a saved early replacement may leave the original publication
+time unknown. Early rows use operation code 3 only in the new key. Slice 3's
+`refresh-provenance.json` stays v1, and older keepers continue to append its
+ordinary rows. Preserve in-flight intent handling and the current refresh
+credential through rollback. Do not restart running sessions as a proof step.
 
-This revision delivers Proposed design text. CI checks the documentation
-head. Implementation, installation and usable acceptance remain pending.
+The design remains Proposed. The table records source delivery by slice.
+Installation and usable acceptance require their own evidence.
 
 ## 7. Investigation boundary and stopped path
 

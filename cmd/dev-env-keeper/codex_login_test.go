@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/keeper"
 )
@@ -93,5 +94,36 @@ func TestClaudeAuthDefaultsAndExplicitPrerequisites(t *testing.T) {
 	o, err = parseFlags([]string{"--enable-claude-auth"})
 	if err != nil || !o.claudeAuth.Enabled || o.claudeAuth.JournalSecret != keeper.DefaultClaudeJournalSecret || o.claudeAuth.LiveSecret != keeper.DefaultClaudeLiveSecret {
 		t.Fatal("explicit auth configuration rejected or defaults wrong")
+	}
+}
+
+func TestClaudeEarlyRecoveryDefaultsAndConfiguration(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "")
+	o, err := parseFlags([]string{"--enable-claude-auth"})
+	if early := o.claudeAuth.EarlyRecovery; err != nil || early.Enabled || early.ProbeInterval != time.Minute || early.MinInterval != 5*time.Minute || early.MaxAttemptsPerDay != 2 {
+		t.Fatal("early recovery must default off with a one-minute probe, five-minute floor and two daily attempts")
+	}
+	o, err = parseFlags([]string{"--enable-claude-auth", "--enable-claude-early-recovery", "--claude-early-probe-interval=30s", "--claude-early-min-interval=2m", "--claude-early-max-attempts-per-day=3"})
+	if early := o.claudeAuth.EarlyRecovery; err != nil || !early.Enabled || early.ProbeInterval != 30*time.Second || early.MinInterval != 2*time.Minute || early.MaxAttemptsPerDay != 3 {
+		t.Fatal("explicit early recovery settings did not reach the keeper options")
+	}
+	if _, err := parseFlags([]string{"--enable-claude-auth", "--enable-claude-early-recovery", "--claude-early-probe-interval=2m", "--claude-early-min-interval=4m"}); err != nil {
+		t.Fatal("a floor of exactly twice the probe interval was refused")
+	}
+	for _, args := range [][]string{
+		{"--enable-claude-early-recovery"},
+		{"--enable-claude-auth", "--enable-claude-early-recovery", "--claude-early-probe-interval=0s"},
+		{"--enable-claude-auth", "--enable-claude-early-recovery", "--claude-early-min-interval=-1m"},
+		{"--claude-early-probe-interval=29999ms"},
+		{"--claude-early-min-interval=119999ms"},
+		{"--claude-early-probe-interval=2m", "--claude-early-min-interval=3999ms"},
+		{"--claude-early-probe-interval=2m", "--claude-early-min-interval=239999ms"},
+		{"--claude-early-probe-interval=2562047h"},
+		{"--claude-early-max-attempts-per-day=0"},
+		{"--claude-early-max-attempts-per-day=33"},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatalf("accepted invalid early recovery flags %v", args)
+		}
 	}
 }

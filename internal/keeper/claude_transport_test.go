@@ -307,6 +307,9 @@ func TestClaudeProfileErrors(t *testing.T) {
 			if !errors.Is(err, errClaudeProfile) || p != (claudeProfile{}) {
 				t.Fatalf("want the fixed error, got %v", err)
 			}
+			if name == "unauthorized" && !errors.Is(err, claudeProbeUnauthorized) {
+				t.Fatal("profile 401 needs a distinct classification")
+			}
 			assertNoClaudeCanary(t, err.Error())
 		})
 	}
