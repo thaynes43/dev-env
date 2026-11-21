@@ -1031,6 +1031,11 @@ func grantAskTarget(g *v1alpha1.AccessGrant) (string, bool) {
 			return "", false
 		}
 		target = g.Spec.Kube.Role
+	case v1alpha1.GrantPodExec:
+		if g.Spec.PodExec == nil {
+			return "", false
+		}
+		target = g.Spec.PodExec.Pod
 	case v1alpha1.GrantCredential:
 		if g.Spec.Credential == nil {
 			return "", false
@@ -1044,7 +1049,7 @@ func grantAskTarget(g *v1alpha1.AccessGrant) (string, bool) {
 		return "", false
 	}
 	n := utf8.RuneCountInString(target)
-	if n < 1 || n > apiv1.AskScopeFieldMaxRunes {
+	if n < 1 || n > apiv1.AskGrantTargetMaxRunes(string(g.Spec.Type)) {
 		return "", false
 	}
 	return target, true
@@ -1072,6 +1077,11 @@ func grantAskDetail(g *v1alpha1.AccessGrant) (string, bool) {
 		detail = kubeAskDetail(g.Spec.Kube)
 	case v1alpha1.GrantEgress:
 		detail = egressAskDetail(g.Spec.Egress)
+	case v1alpha1.GrantPodExec:
+		if g.Spec.PodExec == nil {
+			return "", false
+		}
+		detail = "Open a shell in container " + g.Spec.PodExec.Container + " in namespace " + g.Spec.PodExec.Namespace
 	}
 	if utf8.RuneCountInString(detail) > apiv1.AskScopeFieldMaxRunes {
 		return "", false

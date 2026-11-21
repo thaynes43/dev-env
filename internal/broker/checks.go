@@ -47,6 +47,10 @@ func checkCapabilities(g *v1alpha1.AccessGrant, proxmox, hwssh bool, reserved ..
 		return fmt.Errorf("the name %q is not grant-<id>, a DNS label (D-54)", g.Name)
 	}
 	s := &g.Spec
+	if (s.Type == v1alpha1.GrantPodExec) != (s.PodExec != nil) ||
+		(s.Type == v1alpha1.GrantPodExec) != strings.HasPrefix(g.Name, v1alpha1.PodExecGrantNamePrefix) {
+		return errors.New("pod-exec requires an exact target and a grant-pod-exec name")
+	}
 	if s.Type == v1alpha1.GrantMaintenance {
 		return ValidateMaintenance(g)
 	}
@@ -62,7 +66,7 @@ func checkCapabilities(g *v1alpha1.AccessGrant, proxmox, hwssh bool, reserved ..
 	kube := s.Type == v1alpha1.GrantKube || s.Type == v1alpha1.GrantBreakglass
 	switch {
 	case s.Type != v1alpha1.GrantKube && s.Type != v1alpha1.GrantBreakglass &&
-		s.Type != v1alpha1.GrantEgress && s.Type != v1alpha1.GrantCredential:
+		s.Type != v1alpha1.GrantEgress && s.Type != v1alpha1.GrantCredential && s.Type != v1alpha1.GrantPodExec:
 		return fmt.Errorf("unknown grant type %q", s.Type)
 	case kube != (s.Kube != nil):
 		return errors.New("kube is set for types kube and breakglass, and only there")
@@ -75,6 +79,8 @@ func checkCapabilities(g *v1alpha1.AccessGrant, proxmox, hwssh bool, reserved ..
 	ttl := s.TTL.Duration
 	longest := MaxTTL
 	switch s.Type {
+	case v1alpha1.GrantPodExec:
+		longest = MaxPodExecTTL
 	case v1alpha1.GrantCredential:
 		longest = MaxCredentialTTL
 	case v1alpha1.GrantBreakglass:
@@ -85,6 +91,12 @@ func checkCapabilities(g *v1alpha1.AccessGrant, proxmox, hwssh bool, reserved ..
 	}
 
 	forbidden := append(slices.Clone(DevEnvNamespaces), reserved...)
+	if target := s.PodExec; target != nil {
+		if s.Requester.SessionUID == "" || target.PodUID == "" {
+			return errors.New("pod-exec requires the authenticated session and target pod UIDs")
+		}
+		return ValidatePodExecScope(target, reserved...)
+	}
 	if k := s.Kube; k != nil {
 		if !slices.Contains(catalog, k.Role) {
 			return fmt.Errorf("role %q is not in the grant role catalog", k.Role)

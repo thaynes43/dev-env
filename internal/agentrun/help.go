@@ -1276,10 +1276,12 @@ grant request asks for one grant for the calling session. It prints the
 approval page, then reads the grant every 5s until the phase leaves Pending
 or 30m passes. --no-wait returns the pending grant. An identical ask returns
 the grant the session already holds.
-  --type <type>      kube, egress, credential or breakglass
+  --type <type>      kube, pod-exec, egress, credential or breakglass
   --reason <why>     required; Tom reads it on the approval page
   --role <role>      kube catalog role
-  --namespace <ns>   repeatable, for kube or breakglass
+  --namespace <ns>   one for pod-exec; repeatable for kube or breakglass
+  --pod <name>       exact pod for pod-exec
+  --container <name> exact container for pod-exec
   --secret <name>    repeatable Secret name for role dev-env-grant-namespace-operator only.
                      DNS-1123, at most 63 characters, at most 16 names. Refused for every
                      other type or role. Names only; secret values are never read or sent
@@ -1292,6 +1294,7 @@ the grant the session already holds.
                      installed; removal at expiry, release or session end is neither
                      containment nor revocation, and the key stays valid on every host
   --ttl <duration>   such as 45m; empty uses the API default
+                     pod-exec accepts 10m to 60m and requires Tom's grant Ask approval
 
 grant release names one grant. The grant object stays as the audit record.
 

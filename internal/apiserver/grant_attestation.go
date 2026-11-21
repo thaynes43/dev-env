@@ -46,6 +46,9 @@ func (s *Server) attestGrant(ctx context.Context, w http.ResponseWriter, r *http
 	if err := s.Live.Get(ctx, key, &g); err != nil {
 		return 0, nil, fromGrantKubeError(err, "grant "+key.Name)
 	}
+	if g.Spec.Type == v1alpha1.GrantPodExec {
+		return 0, nil, forbidden("pod-exec requires approval on the grant Ask")
+	}
 	if g.Spec.Kube != nil && (g.Spec.Kube.Reserved || g.Spec.Kube.AllNamespaces || len(g.Spec.Kube.StorageTargets) > 0) {
 		return 0, nil, forbidden("reserved scope cannot use requester attestation")
 	}

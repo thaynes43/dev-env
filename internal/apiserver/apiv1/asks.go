@@ -115,6 +115,7 @@ const (
 	AskMaxLinks                  = 5
 	AskLinkMaxLen                = 300
 	AskScopeFieldMaxRunes        = 200
+	AskGrantPodNameMaxRunes      = 253
 	AskAnswerTextMaxRunes        = 2000
 	AskActorIssuerMaxRunes       = 300
 	AskActorSubjectMaxRunes      = 200
@@ -730,11 +731,11 @@ func validateAskGrant(g *AskGrant) error {
 		return askInvalid("grant.scopeDigest", "must match ^[A-Za-z0-9_-]{43}$")
 	}
 	switch g.Type {
-	case "kube", "egress", "credential", "breakglass", "maintenance":
+	case "kube", "egress", "credential", "breakglass", "maintenance", GrantTypePodExec:
 	default:
-		return askInvalid("grant.type", "must be kube, egress, credential, breakglass or maintenance")
+		return askInvalid("grant.type", "must be kube, egress, credential, breakglass, maintenance or pod-exec")
 	}
-	if err := askText("grant.target", g.Target, 1, AskScopeFieldMaxRunes, false); err != nil {
+	if err := askText("grant.target", g.Target, 1, AskGrantTargetMaxRunes(g.Type), false); err != nil {
 		return err
 	}
 	if len(g.TTL) < 2 || len(g.TTL) > AskGrantTTLMaxLen || !askGrantTTLPattern.MatchString(g.TTL) {
@@ -746,6 +747,14 @@ func validateAskGrant(g *AskGrant) error {
 		}
 	}
 	return nil
+}
+
+// AskGrantTargetMaxRunes accommodates the full Kubernetes pod name on pod-exec cards.
+func AskGrantTargetMaxRunes(typ string) int {
+	if typ == GrantTypePodExec {
+		return AskGrantPodNameMaxRunes
+	}
+	return AskScopeFieldMaxRunes
 }
 
 // validateAskUsername applies the username rule. required is true for an

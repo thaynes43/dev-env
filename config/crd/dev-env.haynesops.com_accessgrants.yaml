@@ -481,6 +481,41 @@ spec:
                     devices
                   rule: '!has(self.runtimeProfile) || (self.resource.matches(''^GPU-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$'')
                     && (!has(self.devices) || size(self.devices) == 0))'
+              podExec:
+                description: PodExec identifies the exact target resolved by the operator.
+                properties:
+                  container:
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  pod:
+                    maxLength: 253
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                  podUID:
+                    maxLength: 36
+                    pattern: ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$
+                    type: string
+                required:
+                - container
+                - namespace
+                - pod
+                - podUID
+                type: object
+                x-kubernetes-validations:
+                - message: immutable pod exec target
+                  rule: self == oldSelf
+                - message: pod-exec requires a namespace covered by Kyverno and outside
+                    the identity guard's exec denies
+                  rule: '!(self.namespace in [''dev-env-system'', ''dev-agents'',
+                    ''dev-tools'', ''dev-env-admin-issuance'', ''kube-system'', ''kyverno'',
+                    ''flux-system'', ''external-secrets'', ''cert-manager'', ''ceph-csi'',
+                    ''openebs-system'', ''volsync-system'', ''k8tz'', ''kube-public'',
+                    ''kube-node-lease''])'
               reason:
                 description: |-
                   Reason is why the agent asks, in its own words. The approval page shows
@@ -563,6 +598,7 @@ spec:
                 - credential
                 - breakglass
                 - maintenance
+                - pod-exec
                 type: string
                 x-kubernetes-validations:
                 - message: immutable after create; only release may change
@@ -582,6 +618,12 @@ spec:
               rule: (self.type == 'maintenance') == has(self.maintenance)
             - message: credential is set for type credential, and only there
               rule: (self.type == 'credential') == has(self.credential)
+            - message: podExec is set for type pod-exec, and only there
+              rule: (self.type == 'pod-exec') == has(self.podExec)
+            - message: pod-exec requires the authenticated session UID and at most
+                one hour
+              rule: self.type != 'pod-exec' || (duration(self.ttl) <= duration('1h')
+                && has(self.requester.sessionUID))
             - message: type breakglass and role dev-env-grant-breakglass go together
                 (D-27)
               rule: '!has(self.kube) || ((self.type == ''breakglass'') == (self.kube.role
@@ -602,7 +644,7 @@ spec:
             - message: immutable after create; only release may change
               rule: has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress)
                 && has(self.credential) == has(oldSelf.credential) && has(self.maintenance)
-                == has(oldSelf.maintenance)
+                == has(oldSelf.maintenance) && has(self.podExec) == has(oldSelf.podExec)
             - message: release cannot be taken back
               rule: '!(has(oldSelf.release) && oldSelf.release) || (has(self.release)
                 && self.release)'

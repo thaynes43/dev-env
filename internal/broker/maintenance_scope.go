@@ -48,7 +48,7 @@ func MaintenanceDigest(g *v1alpha1.AccessGrant) string {
 // ValidateMaintenance repeats the envelope bounds independently of installed CRDs.
 func ValidateMaintenance(g *v1alpha1.AccessGrant) error {
 	m := g.Spec.Maintenance
-	if g.Spec.Type != v1alpha1.GrantMaintenance || m == nil || g.Spec.Kube != nil || g.Spec.Egress != nil || g.Spec.Credential != nil {
+	if g.Spec.Type != v1alpha1.GrantMaintenance || m == nil || g.Spec.Kube != nil || g.Spec.Egress != nil || g.Spec.Credential != nil || g.Spec.PodExec != nil {
 		return errors.New("maintenance requires only its task envelope")
 	}
 	if g.Spec.Requester.SessionUID == "" || m.Coordinator.Name != g.Spec.Requester.Session || m.Coordinator.UID != string(g.Spec.Requester.SessionUID) || !validMaintenanceIdentity(m.Coordinator) {

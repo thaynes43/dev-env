@@ -272,6 +272,33 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
   nodes' host-key check (fixed in 2.38.0, #474). In 2.38.0 the keeper misread
   Proxmox's answer and deleted each new token at once (fixed in 2.38.1, #481).
 
+### Ask for a shell in one pod
+
+When grant Asks are enabled, run this from the session that needs the shell:
+
+```bash
+agent-run grant request --type pod-exec --namespace "$NS" --pod "$POD" \
+  --container "$CONTAINER" --ttl 20m --reason "Inspect the running process" --no-wait
+agent-run grant show "$GRANT"
+```
+
+Set `GRANT` to the name returned by the request. Tom sees the namespace,
+pod, container, reason and TTL on his phone. The TTL can be 10 to 60 minutes.
+After approval and once `grant show -o json` reports `installedAt`, use the
+grant's kube context. The connection uses POST because the grant allows
+`create` on `pods/exec`:
+
+```bash
+KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false kubectl --context "$GRANT" -n "$NS" \
+  exec -it "$POD" -c "$CONTAINER" -- sh
+agent-run grant release "$GRANT"
+```
+
+Protected namespaces and namespaces skipped by the exec guard cannot be
+requested. A replacement pod needs its own approval. Expiry, release and
+session end close access for new connections. An already-open shell can
+stay open, so exit the shell when finished.
+
 ### A terminal instead of code-server
 
 v2 has no code-server, by your ruling of 2026-10-20

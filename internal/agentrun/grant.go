@@ -122,7 +122,7 @@ func (a *app) grantList(ctx context.Context, args []string) error {
 
 func (a *app) grantRequest(ctx context.Context, args []string) error {
 	cmd := newCommand("grant", outputJSON)
-	var typ, role, credential, ttl, reason string
+	var typ, role, credential, ttl, reason, pod, container string
 	var noWait, reserved, allNamespaces bool
 	var targets stringList
 	var namespaces, fqdns, cidrs, endpoints, ports, secrets stringList
@@ -131,6 +131,8 @@ func (a *app) grantRequest(ctx context.Context, args []string) error {
 	cmd.fs.StringVar(&credential, "credential", "", "")
 	cmd.fs.StringVar(&ttl, "ttl", "", "")
 	cmd.fs.StringVar(&reason, "reason", "", "")
+	cmd.fs.StringVar(&pod, "pod", "", "")
+	cmd.fs.StringVar(&container, "container", "", "")
 	cmd.fs.BoolVar(&noWait, "no-wait", false, "")
 	cmd.fs.BoolVar(&reserved, "reserved", false, "")
 	cmd.fs.BoolVar(&allNamespaces, "all-namespaces", false, "")
@@ -151,6 +153,14 @@ func (a *app) grantRequest(ctx context.Context, args []string) error {
 	req, err := grantRequestBody(typ, role, credential, ttl, reason, namespaces, secrets, fqdns, cidrs, endpoints, ports)
 	if err != nil {
 		return err
+	}
+	if typ == apiv1.GrantTypePodExec {
+		if len(namespaces) != 1 || pod == "" || container == "" {
+			return usageError("grant request: pod-exec requires one --namespace, --pod and --container")
+		}
+		req.Pod, req.Container = pod, container
+	} else if pod != "" || container != "" {
+		return usageError("grant request: --pod and --container are only for pod-exec")
 	}
 	req.Reserved = reserved || allNamespaces || len(targets) > 0
 	req.AllNamespaces = allNamespaces
@@ -237,9 +247,9 @@ func (a *app) finishGrantRequest(status int, out apiv1.Grant, format string) err
 
 func grantRequestBody(typ, role, credential, ttl, reason string, namespaces, secrets, fqdns, cidrs, endpoints, ports []string) (apiv1.CreateGrantRequest, error) {
 	switch typ {
-	case apiv1.GrantTypeKube, apiv1.GrantTypeEgress, apiv1.GrantTypeCredential, apiv1.GrantTypeBreakglass:
+	case apiv1.GrantTypeKube, apiv1.GrantTypePodExec, apiv1.GrantTypeEgress, apiv1.GrantTypeCredential, apiv1.GrantTypeBreakglass:
 	default:
-		return apiv1.CreateGrantRequest{}, usageError("grant request: --type is kube, egress, credential or breakglass, not %q", typ)
+		return apiv1.CreateGrantRequest{}, usageError("grant request: --type is kube, pod-exec, egress, credential or breakglass, not %q", typ)
 	}
 	if err := validateGrantSecretNames(typ, role, secrets); err != nil {
 		return apiv1.CreateGrantRequest{}, err
@@ -588,6 +598,9 @@ func (a *app) printGrant(out apiv1.Grant) error {
 	}
 	a.outf("name: %s\nphase: %s\ntype: %s\nsession: %s\nttl: %s\nexpires: %s\nreason: %s\n",
 		out.Name, out.Phase, out.Type, firstOf(out.Session, "-"), out.TTL, expires, out.Reason)
+	if out.Type == apiv1.GrantTypePodExec {
+		a.outf("namespace: %s\npod: %s\ncontainer: %s\n", strings.Join(out.Namespaces, ", "), out.Pod, out.Container)
+	}
 	if len(out.Secrets) > 0 {
 		a.outf("secrets: %s\n", strings.Join(out.Secrets, ", "))
 	}

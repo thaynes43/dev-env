@@ -52,10 +52,30 @@ func (b *Broker) ensure(ctx context.Context, g *v1alpha1.AccessGrant) ([]string,
 		made = append(made, "serviceaccount "+b.SessionNamespace+"/"+g.Name)
 	}
 
-	k := g.Spec.Kube
-	roleRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: k.Role}
+	roleRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole"}
+	if target := g.Spec.PodExec; target != nil {
+		roleRef.Kind, roleRef.Name = "Role", g.Name
+		role := &rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{Namespace: target.Namespace, Name: g.Name, Labels: labels},
+			Rules: []rbacv1.PolicyRule{
+				{APIGroups: []string{""}, Resources: []string{"pods"}, ResourceNames: []string{target.Pod}, Verbs: []string{"get"}},
+				{APIGroups: []string{""}, Resources: []string{"pods/exec"}, ResourceNames: []string{target.Pod}, Verbs: []string{"create"}},
+			},
+		}
+		created, err := b.ensureOne(ctx, g, role, &rbacv1.Role{}, func(o client.Object) bool {
+			return apiequality.Semantic.DeepEqual(o.(*rbacv1.Role).Rules, role.Rules)
+		})
+		if err != nil {
+			return made, err
+		}
+		if created {
+			made = append(made, "role "+describe(role))
+		}
+	} else {
+		roleRef.Name = g.Spec.Kube.Role
+	}
 	subjects := []rbacv1.Subject{b.subject(g)}
-	if v1alpha1.ClusterWideRole(k.Role) {
+	if v1alpha1.ClusterWideRole(roleRef.Name) {
 		crb := &rbacv1.ClusterRoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: g.Name, Labels: labels},
 			RoleRef:    roleRef,
@@ -129,6 +149,9 @@ func (b *Broker) ensureOne(ctx context.Context, g *v1alpha1.AccessGrant, want, h
 		case err == nil:
 			if have.GetLabels()[v1alpha1.LabelGrant] != g.Name {
 				return false, permanent{fmt.Errorf("%s %s exists and the broker did not make it for this grant", kind, describe(want))}
+			}
+			if g.Spec.PodExec != nil && have.GetLabels()[v1alpha1.LabelPrefix+"grant-uid"] != string(g.UID) {
+				return false, permanent{fmt.Errorf("%s %s belongs to another grant UID", kind, describe(want))}
 			}
 			if g.Status.Reserved != nil && (have.GetLabels()[v1alpha1.LabelPrefix+"grant-uid"] != string(g.UID) || (want.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"] != "" && have.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"] != want.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"])) {
 				return false, permanent{fmt.Errorf("reserved resource ownership differs from exact grant/namespace UID")}
@@ -212,9 +235,14 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 			}
 		}
 	}
+	if target := g.Spec.PodExec; target != nil {
+		meta := metav1.ObjectMeta{Namespace: target.Namespace, Name: g.Name}
+		del(&rbacv1.RoleBinding{ObjectMeta: meta})
+		del(&rbacv1.Role{ObjectMeta: meta})
+	}
 	if g.Spec.Type == v1alpha1.GrantEgress {
 		del(egress.Object(b.SessionNamespace, g.Name))
-	} else if g.Spec.Kube != nil && len(errs) == 0 {
+	} else if (g.Spec.Kube != nil || g.Spec.PodExec != nil) && len(errs) == 0 {
 		// The identity goes last, once nothing binds it.
 		del(&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: b.SessionNamespace, Name: g.Name}})
 	}
@@ -223,7 +251,7 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 	}
 
 	l := log.FromContext(ctx)
-	if g.Spec.Kube != nil && b.Installer != nil {
+	if (g.Spec.Kube != nil || g.Spec.PodExec != nil) && b.Installer != nil {
 		// A session being reaped keeps its pod until its rescue, so a
 		// deleting session's pod still has the token taken out.
 		// Exec may have delivered a token before its installation status
@@ -261,6 +289,9 @@ func (b *Broker) deleteOwn(ctx context.Context, g *v1alpha1.AccessGrant, o clien
 			return true, nil
 		}
 		return false, fmt.Errorf("read %s %s: %w", kindOf(o), describe(o), err)
+	}
+	if g.Spec.PodExec != nil && o.GetLabels()[v1alpha1.LabelPrefix+"grant-uid"] != string(g.UID) {
+		return false, nil
 	}
 	if g.Status.Reserved != nil {
 		if o.GetLabels()[v1alpha1.LabelPrefix+"grant-uid"] != string(g.UID) {

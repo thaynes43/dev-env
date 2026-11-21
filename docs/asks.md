@@ -289,6 +289,11 @@ ask or its approval scope has expired is 410 (`expired`). A count bound is
 
 ## Who can answer a grant Ask
 
+A pod-exec Ask names the pod, namespace and container, shows the reason and
+requested TTL, and binds the approval to the stored pod UID. Tom approves
+or declines it here. Expiry and release stop new connections. An open shell
+can continue after the grant ends.
+
 The broker trusts the stored answer. It cannot tell who wrote it. Whoever may update `asks/status` in `dev-agents` can store an answer the broker will apply. Whoever may create an Ask, patch its metadata, or delete an Ask can occupy the grant's Ask name, change the origin label, or remove the Ask the grant already named. By design the operator stores the portal's answer for a signed-in person, and the broker creates the grant Ask. The coordinator checks the live writers of create, metadata patch, delete, and `asks/status` before the flag is set.
 
 ## Broker verbs on Asks and TaskClaims

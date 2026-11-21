@@ -538,6 +538,7 @@ spec:
                 - credential
                 - breakglass
                 - maintenance
+                - pod-exec
                 type: string
             required:
             - description
@@ -548,6 +549,9 @@ spec:
             - message: 'no policy approves break-glass: authenticated human approval
                 is required (D-27)'
               rule: self.type != 'breakglass'
+            - message: pod-exec requires authenticated approval through the grant
+                Ask
+              rule: self.type != 'pod-exec'
             - message: 'no standing policy approves maintenance: only an attested
                 or delegated policy may name a maintenance scope (ADR-013, DESIGN-042)'
               rule: self.type != 'maintenance' || has(self.attested) || has(self.delegated)

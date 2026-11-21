@@ -3743,6 +3743,28 @@ its name because a ClusterRoleBinding's `roleRef` cannot change.
 
 ### 6.12 Access: no prompts in the pod, control at the platform
 
+#### Pod shell grants (OpenProject #945)
+
+A session can ask to open a shell in one named container of an existing pod,
+including a pod the Kyverno exec guard normally refuses. The operator reads the
+pod once and stores its UID with the namespace, pod name and container name.
+The request uses the kube grant TTL range of 10 to 60 minutes. The dev-env
+identity guard's protected namespaces and namespaces skipped by Kyverno are
+outside this route.
+
+Tom sees the namespace, pod, container, reason and requested duration on the
+existing grant Ask. His authenticated approval applies to that pod UID.
+Standing policies, attestations and delegates cannot approve a pod shell grant.
+The broker checks the target again and installs the usual short-lived kube
+credential. Its per-grant Role can get that pod and create its exec
+connection. Kyverno checks the exact container and live pod UID for each new
+connection, and requires an active, unexpired grant.
+
+Expiry, release or session end removes the RoleBinding, Role and ServiceAccount.
+A shell opened before expiry can stay open after the grant ends. The CRD and
+admission policies must be installed before enabling the existing grant Ask
+route for this feature.
+
 **S6 source amendment, 2026-10-31 (ADR-014).** Attested maintenance requires the live requester's explicit depth label `0` and a creator in `--attested-maintenance-creators`; an unset list follows the configured maintenance human ServiceAccount, and an explicitly empty list admits none. Children, missing parents and missing or malformed depth fail closed. Approval, executor creation and active rechecks share this eligibility rule. Creator removal ends the approval and uses the termination-proof cleanup tail. This grants no runtime activation and does not require a human approval actor. See [ADR-014](../adrs/014-attested-maintenance-creators.md).
 
 Tom (2026-10-06): agents should skip permission prompts for their own vendor's tools,
