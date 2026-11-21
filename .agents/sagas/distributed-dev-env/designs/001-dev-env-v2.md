@@ -3781,8 +3781,8 @@ Expiry, release or session end removes the ServiceAccount first, then the
 RoleBinding and Role. The deadline stops new shells. A shell opened before
 the deadline keeps running until it is closed.
 
-**Q-945-01, 2026-11-21T20:2xZ.** Tom approved that limit on his phone with
-“Fine, home lab (Recommended).”
+**Q-945-01, 2026-11-21.** Tom approved that limit on his phone. His answer
+was “Fine, home lab (Recommended)”.
 
 Pod replacement between admission and stream setup is a known race. The UID
 check runs at admission, and Kubernetes resolves the pod name again when it
