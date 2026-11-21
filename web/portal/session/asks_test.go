@@ -231,6 +231,7 @@ func TestPodExecGrantAskCardAndAnswer(t *testing.T) {
 			for _, want := range []string{
 				"Inspect the running process", "<dt>Pod</dt><dd>target</dd>", ask.Grant.Detail,
 				"<dt>Time to open new shells</dt><dd>20 minutes</dd>",
+				"The security details describe the pod when the request was made.",
 				"A shell opened before the deadline keeps running until it is closed.",
 				"the shell can open in the replacement pod.",
 			} {

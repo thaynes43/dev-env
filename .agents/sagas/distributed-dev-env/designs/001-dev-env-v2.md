@@ -3750,7 +3750,9 @@ including a pod the Kyverno exec guard normally refuses. The operator reads the
 pod once and stores its UID with the namespace, pod name and container name.
 The same read records whether the pod has a privileged container, uses host
 PID or runs as a ServiceAccount on the exec guard's privileged list. These
-facts are immutable and included in the approval's scope digest.
+request-time facts are immutable and included in the approval's scope digest.
+The card identifies them as a snapshot. An ephemeral container can be added
+later without changing the pod UID.
 The request uses the kube grant TTL range of 10 to 60 minutes. The dev-env
 identity guard's protected namespaces and namespaces skipped by Kyverno are
 outside this route.
