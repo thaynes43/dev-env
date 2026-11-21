@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	admissionv1 "k8s.io/api/admissionregistration/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -17,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -93,6 +93,26 @@ func TestPodExecBrokerRBACAndInstaller(t *testing.T) {
 	if err := admin.Create(ctx, target); err != nil {
 		t.Fatal(err)
 	}
+	kube, err := kubernetes.NewForConfig(brokerCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// These pods have no node and envtest has no kubelet. The requests can
+	// exercise native CONNECT admission without opening an exec stream.
+	connect := func(pod *corev1.Pod, container string) error {
+		return kube.CoreV1().RESTClient().Post().Namespace(pod.Namespace).Resource("pods").Name(pod.Name).
+			SubResource("exec").Param("container", container).Param("stdout", "true").Do(ctx).Error()
+	}
+	t.Run("broker exec to workload namespace is refused", func(t *testing.T) {
+		if err := connect(target, "app"); !apierrors.IsForbidden(err) || !strings.Contains(err.Error(), "dev-env-broker-guard:") {
+			t.Fatalf("expected broker guard to refuse CONNECT, got %v", err)
+		}
+	})
+	t.Run("broker exec to session namespace passes admission", func(t *testing.T) {
+		if err := connect(requesterPod, "agent"); !apierrors.IsBadRequest(err) || !strings.Contains(err.Error(), "does not have a host assigned") {
+			t.Fatalf("expected admission to pass before the test server checks scheduling, got %v", err)
+		}
+	})
 	n := newGrant(t, s, func(g *v1alpha1.AccessGrant) {
 		g.Name = name("grant-pod-exec")
 		g.Spec.Type, g.Spec.Kube = v1alpha1.GrantPodExec, nil

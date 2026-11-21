@@ -3760,6 +3760,10 @@ credential. Its per-grant Role can get that pod and create its exec
 connection. Kyverno checks the exact container and live pod UID for each new
 connection, and requires an active, unexpired grant.
 
+Replacing the target pod does not trigger a broker reconcile. Its name-based
+Role can remain until the next reconcile or expiry. Kyverno refuses new
+connections to a replacement UID during that time.
+
 The operator and broker each need cluster-wide named Pod reads for the UID
 checks. The broker needs get, create and delete on Roles and holds
 `create pods/exec` in RBAC so Kubernetes lets it delegate that permission.
