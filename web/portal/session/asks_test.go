@@ -213,7 +213,8 @@ func TestPodExecGrantAskCardAndAnswer(t *testing.T) {
 			ask.Options, ask.Recommended, ask.AllowFreeText = nil, "", false
 			ask.Question = "Inspect the running process"
 			ask.Grant = &apiv1.AskGrant{UID: "fixture-grant", ScopeDigest: strings.Repeat("a", 43),
-				Type: apiv1.GrantTypePodExec, Target: "target", TTL: "20m0s", Detail: "Open a shell in container app in namespace fixture"}
+				Type: apiv1.GrantTypePodExec, Target: "target", TTL: "20m0s",
+				Detail: "Shell in app (fixture). Privileged: yes, host PID: no, powerful ServiceAccount: yes"}
 			userInfo := strings.TrimSuffix(currentAllow, "}") + `,"preferred_username":"fixture-approver"}`
 			switch mode {
 			case "missing username":
@@ -227,13 +228,19 @@ func TestPodExecGrantAskCardAndAnswer(t *testing.T) {
 			if page.Code != http.StatusOK {
 				t.Fatalf("grant Ask returned %d", page.Code)
 			}
-			for _, want := range []string{"Inspect the running process", "<dt>Pod</dt><dd>target</dd>", ask.Grant.Detail, "20 minutes"} {
+			for _, want := range []string{
+				"Inspect the running process", "<dt>Pod</dt><dd>target</dd>", ask.Grant.Detail,
+				"<dt>Time to open new shells</dt><dd>20 minutes</dd>",
+				"A shell opened before the deadline keeps running until it is closed.",
+				"the shell can open in the replacement pod.",
+			} {
 				if !strings.Contains(page.Body.String(), want) {
 					t.Errorf("grant card missing %q", want)
 				}
 			}
 			servable := mode != "missing username" && mode != "invalid username"
-			if strings.Contains(page.Body.String(), "Approve for 20 minutes") != servable ||
+			if strings.Contains(page.Body.String(), "Allow new shells for 20 minutes") != servable ||
+				strings.Contains(page.Body.String(), "Approve for 20 minutes") ||
 				strings.Contains(page.Body.String(), ">Decline</button>") != servable ||
 				strings.Contains(page.Body.String(), "fixture-approver") || strings.Contains(page.Body.String(), "Answer before") {
 				t.Fatal("wrong answer controls or identity shown")

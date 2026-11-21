@@ -3748,12 +3748,17 @@ its name because a ClusterRoleBinding's `roleRef` cannot change.
 A session can ask to open a shell in one named container of an existing pod,
 including a pod the Kyverno exec guard normally refuses. The operator reads the
 pod once and stores its UID with the namespace, pod name and container name.
+The same read records whether the pod has a privileged container, uses host
+PID or runs as a ServiceAccount on the exec guard's privileged list. These
+facts are immutable and included in the approval's scope digest.
 The request uses the kube grant TTL range of 10 to 60 minutes. The dev-env
 identity guard's protected namespaces and namespaces skipped by Kyverno are
 outside this route.
 
-Tom sees the namespace, pod, container, reason and requested duration on the
-existing grant Ask. His authenticated approval applies to that pod UID.
+The grant Ask shows the namespace, pod, container, security facts, reason and
+time allowed for new connections. Any portal admin can answer. The broker
+records the approver as `authentik/<preferred_username>` and binds approval to
+that pod UID.
 Standing policies, attestations and delegates cannot approve a pod shell grant.
 The broker checks the target again and installs the usual short-lived kube
 credential. Its per-grant Role can get that pod and create its exec
@@ -3772,12 +3777,17 @@ only a one-pod Role and a same-name RoleBinding to its own grant
 ServiceAccount. Install and verify that guard before widening the broker's
 RBAC. Kyverno uses its existing named AccessGrant lookup in `dev-agents`.
 
-Expiry, release or session end removes the RoleBinding, Role and ServiceAccount.
-A shell opened before expiry can stay open after the grant ends. The UID
-check happens at admission. Kubernetes resolves the pod name again when
-opening the connection, which leaves a race if the pod is replaced between
-those steps. Install the CRDs and check both admission guards and the existing
-grant Ask prerequisites before activation.
+Expiry, release or session end removes the ServiceAccount first, then the
+RoleBinding and Role. The deadline stops new shells. A shell opened before
+the deadline keeps running until it is closed.
+
+**Q-945-01, 2026-11-21T20:2xZ.** Tom approved that limit on his phone with
+“Fine, home lab (Recommended).”
+
+Pod replacement between admission and stream setup is a known race. The UID
+check runs at admission, and Kubernetes resolves the pod name again when it
+opens the stream. Install the CRDs and check both admission guards and the
+existing grant Ask prerequisites before activation.
 
 **S6 source amendment, 2026-10-31 (ADR-014).** Attested maintenance requires the live requester's explicit depth label `0` and a creator in `--attested-maintenance-creators`; an unset list follows the configured maintenance human ServiceAccount, and an explicitly empty list admits none. Children, missing parents and missing or malformed depth fail closed. Approval, executor creation and active rechecks share this eligibility rule. Creator removal ends the approval and uses the termination-proof cleanup tail. This grants no runtime activation and does not require a human approval actor. See [ADR-014](../adrs/014-attested-maintenance-creators.md).
 

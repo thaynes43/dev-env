@@ -16,11 +16,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/grantattest"
 )
 
 // kubeReq is a valid kube grant request.
@@ -92,8 +94,13 @@ func TestPodExecGrantRequest(t *testing.T) {
 	f := newFixture(t)
 	tok := f.sessionPod("session-fixture", "dev", 0)
 	target := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "fixture", Name: "target", UID: uuid.NewUUID()},
-		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "frontend", Name: "target", UID: uuid.NewUUID()},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: "headlamp",
+			HostPID:            true,
+			Containers:         []corev1.Container{{Name: "app"}, {Name: "sidecar"}},
+			InitContainers:     []corev1.Container{{Name: "init", SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)}}},
+		},
 	}
 	ctx := t.Context()
 	if err := f.c.Create(ctx, target); err != nil {
@@ -114,8 +121,23 @@ func TestPodExecGrantRequest(t *testing.T) {
 		got.Pod != target.Name || got.Container != req.Container || got.Phase != apiv1.GrantPending {
 		t.Fatalf("created %+v with %d pod reads", got, reads)
 	}
-	if stored := f.grant(got.Name).Spec.PodExec; stored == nil || stored.PodUID != string(target.UID) {
+	grant := f.grant(got.Name)
+	stored := grant.Spec.PodExec
+	wantSecurity := v1alpha1.PodExecTargetSecurity{Privileged: true, HostPID: true, PowerfulServiceAccount: true}
+	if stored == nil || stored.PodUID != string(target.UID) || stored.Security == nil || *stored.Security != wantSecurity {
 		t.Fatalf("stored target %+v", stored)
+	}
+	digest := grantattest.ScopeDigest(grant)
+	for _, clear := range []func(*v1alpha1.PodExecTargetSecurity){
+		func(s *v1alpha1.PodExecTargetSecurity) { s.Privileged = false },
+		func(s *v1alpha1.PodExecTargetSecurity) { s.HostPID = false },
+		func(s *v1alpha1.PodExecTargetSecurity) { s.PowerfulServiceAccount = false },
+	} {
+		changed := grant.DeepCopy()
+		clear(changed.Spec.PodExec.Security)
+		if grantattest.ScopeDigest(changed) == digest {
+			t.Fatalf("security change did not change the digest: %+v", changed.Spec.PodExec.Security)
+		}
 	}
 	if same := f.request(tok, req, http.StatusOK); same.Name != got.Name {
 		t.Fatal("identical target did not merge")
@@ -128,11 +150,16 @@ func TestPodExecGrantRequest(t *testing.T) {
 	}
 	replacement := target.DeepCopy()
 	replacement.ResourceVersion, replacement.UID = "", uuid.NewUUID()
+	replacement.Spec.HostPID, replacement.Spec.ServiceAccountName, replacement.Spec.InitContainers = false, "default", nil
 	if err := f.c.Create(ctx, replacement); err != nil {
 		t.Fatal(err)
 	}
-	if next := f.request(tok, req, http.StatusCreated); next.Name == got.Name || next.PodUID != string(replacement.UID) {
+	next := f.request(tok, req, http.StatusCreated)
+	if next.Name == got.Name || next.PodUID != string(replacement.UID) {
 		t.Fatalf("replacement reused the old scope: %+v", next)
+	}
+	if security := f.grant(next.Name).Spec.PodExec.Security; security == nil || *security != (v1alpha1.PodExecTargetSecurity{}) {
+		t.Fatalf("replacement security snapshot = %+v", security)
 	}
 	for _, tc := range []struct {
 		name   string

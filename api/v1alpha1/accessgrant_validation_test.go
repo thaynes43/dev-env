@@ -89,11 +89,21 @@ func podExecGrant() *v1alpha1.AccessGrant {
 
 func TestPodExecGrantSchema(t *testing.T) {
 	g := podExecGrant()
+	g.Spec.PodExec.Security = &v1alpha1.PodExecTargetSecurity{Privileged: true}
 	if err := k8s.Create(ctx(t), g); err != nil {
 		t.Fatal(err)
 	}
-	g.Spec.PodExec.Container = "other"
-	wantInvalid(t, k8s.Update(ctx(t), g), "immutable pod exec target")
+	for _, edit := range []func(*v1alpha1.PodExecGrant){
+		func(p *v1alpha1.PodExecGrant) { p.Container = "other" },
+		func(p *v1alpha1.PodExecGrant) { p.Security.Privileged = false },
+		func(p *v1alpha1.PodExecGrant) { p.Security.HostPID = true },
+		func(p *v1alpha1.PodExecGrant) { p.Security.PowerfulServiceAccount = true },
+		func(p *v1alpha1.PodExecGrant) { p.Security = nil },
+	} {
+		changed := g.DeepCopy()
+		edit(changed.Spec.PodExec)
+		wantInvalid(t, k8s.Update(ctx(t), changed), "immutable pod exec target")
+	}
 	for _, tc := range []struct {
 		name string
 		edit func(*v1alpha1.AccessGrant)

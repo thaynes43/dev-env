@@ -253,7 +253,7 @@ func (b *Broker) decisionAllowed(ctx context.Context, g *v1alpha1.AccessGrant, d
 		return 0, fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	if target := g.Spec.PodExec; target != nil {
-		if _, err := ReadPodExecTarget(ctx, b.APIReader, target); err != nil {
+		if _, err := readPodExecTarget(ctx, b.APIReader, target); err != nil {
 			if p := (permanent{}); errors.As(err, &p) {
 				return 0, fmt.Errorf("%w: %w", ErrRefused, err)
 			}

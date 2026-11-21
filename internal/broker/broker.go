@@ -531,7 +531,7 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 		if g.Status.Ask == "" || !strings.HasPrefix(g.Status.ApprovedBy, "authentik/") {
 			return b.end(ctx, g, v1alpha1.GrantFailed, "", "pod-exec has no authenticated grant Ask approval", now)
 		}
-		if _, err := ReadPodExecTarget(ctx, b.APIReader, target); err != nil {
+		if _, err := readPodExecTarget(ctx, b.APIReader, target); err != nil {
 			if p := (permanent{}); errors.As(err, &p) {
 				return b.end(ctx, g, v1alpha1.GrantFailed, "", err.Error(), now)
 			}

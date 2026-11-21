@@ -250,6 +250,17 @@ type PodExecGrant struct {
 	// +kubebuilder:validation:MaxLength=36
 	// +kubebuilder:validation:Pattern=`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`
 	PodUID string `json:"podUID"`
+	// Security records what the operator saw on the same read that resolved
+	// PodUID. Older grants may have no recorded security details.
+	// +optional
+	Security *PodExecTargetSecurity `json:"security,omitempty"`
+}
+
+// PodExecTargetSecurity is the request-time security snapshot shown to approvers.
+type PodExecTargetSecurity struct {
+	Privileged             bool `json:"privileged"`
+	HostPID                bool `json:"hostPID"`
+	PowerfulServiceAccount bool `json:"powerfulServiceAccount"`
 }
 
 // PodExecGrantNamePrefix distinguishes these ServiceAccounts at admission.

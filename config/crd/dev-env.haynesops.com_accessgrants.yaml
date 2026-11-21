@@ -500,6 +500,22 @@ spec:
                     maxLength: 36
                     pattern: ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$
                     type: string
+                  security:
+                    description: |-
+                      Security records what the operator saw on the same read that resolved
+                      PodUID. Older grants may have no recorded security details.
+                    properties:
+                      hostPID:
+                        type: boolean
+                      powerfulServiceAccount:
+                        type: boolean
+                      privileged:
+                        type: boolean
+                    required:
+                    - hostPID
+                    - powerfulServiceAccount
+                    - privileged
+                    type: object
                 required:
                 - container
                 - namespace

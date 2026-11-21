@@ -195,11 +195,10 @@ func (b *Broker) ensureOne(ctx context.Context, g *v1alpha1.AccessGrant, want, h
 	return false, fmt.Errorf("%s %s appeared and went while it was being made", kind, describe(want))
 }
 
-// revoke deletes what the grant made, the bindings before the ServiceAccount,
-// then asks the installer to take the token out of the session's pod. It
-// deletes only objects named after the grant and labelled with it; NotFound is
-// success, so it can run again. Deleting the ServiceAccount ends every token
-// of the grant at once.
+// revoke deletes what the grant made and then asks the installer to remove the
+// token. It deletes only objects named after the grant and labelled with it.
+// NotFound is success, so it can run again. Deleting the ServiceAccount ends
+// every token of the grant at once.
 func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string) error {
 	if g.Status.AdminCredential != nil {
 		return b.revokeAdmin(ctx, g)
@@ -237,12 +236,14 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 	}
 	if target := g.Spec.PodExec; target != nil {
 		meta := metav1.ObjectMeta{Namespace: target.Namespace, Name: g.Name}
+		// Invalidate pod-exec tokens even if a subsequent RBAC delete fails.
+		del(&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: b.SessionNamespace, Name: g.Name}})
 		del(&rbacv1.RoleBinding{ObjectMeta: meta})
 		del(&rbacv1.Role{ObjectMeta: meta})
 	}
 	if g.Spec.Type == v1alpha1.GrantEgress {
 		del(egress.Object(b.SessionNamespace, g.Name))
-	} else if (g.Spec.Kube != nil || g.Spec.PodExec != nil) && len(errs) == 0 {
+	} else if g.Spec.Kube != nil && len(errs) == 0 {
 		// The identity goes last, once nothing binds it.
 		del(&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: b.SessionNamespace, Name: g.Name}})
 	}

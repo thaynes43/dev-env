@@ -63,11 +63,9 @@ func (s *Server) createGrant(ctx context.Context, w http.ResponseWriter, r *http
 		}
 	}
 	if target := g.Spec.PodExec; target != nil {
-		uid, err := broker.ReadPodExecTarget(ctx, s.Live, target)
-		if err != nil {
+		if err := broker.ResolvePodExecTarget(ctx, s.Live, target); err != nil {
 			return 0, nil, forbidden("pod-exec target: %s", err)
 		}
-		target.PodUID = uid
 	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
