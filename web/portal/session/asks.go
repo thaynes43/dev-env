@@ -370,7 +370,7 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		authFailure(w, portal.ErrDenied)
 		return
 	}
-	r, key, record, err := authorizedAction(c.Session, c.Authorizer, r)
+	r, key, record, username, err := authorizedAskAction(c, r)
 	if err != nil {
 		if r.Method == http.MethodGet && errors.Is(err, portal.ErrDenied) {
 			if _, authErr := c.Session.Authenticate(r); errors.Is(authErr, portal.ErrDenied) {
@@ -409,7 +409,7 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			authFailure(w, err)
 			return
 		}
-		err = postAskAnswer(r, c, key, record, ask)
+		err = postAskAnswer(r, c, key, record, username, ask)
 		if err == nil {
 			w.Header().Set("Location", AsksPath+"?ask="+id)
 			w.WriteHeader(http.StatusSeeOther)
@@ -479,6 +479,12 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	renderAsks(w, r, c, key, record, page, status)
 }
 
+func authorizedAskAction(c AssemblyConfig, r *http.Request) (*http.Request, Handle, Record, string, error) {
+	var username string
+	r, key, record, err := authorizedAction(c.Session, c.Authorizer, r.WithContext(context.WithValue(r.Context(), askUsernameKey{}, &username)))
+	return r, key, record, username, err
+}
+
 // Use only fixed reason codes and safe HTTP status values, never upstream text.
 func askReadNotice(err error, observed time.Time) string {
 	failure := sessionFailure(err)
@@ -501,7 +507,7 @@ func askReadNotice(err error, observed time.Time) string {
 }
 
 func renderAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key Handle, record Record, page portal.AsksPage, status int) {
-	_, freshKey, fresh, err := authorizedAction(c.Session, c.Authorizer, r)
+	_, freshKey, fresh, username, err := authorizedAskAction(c, r)
 	if err != nil || !sameAskSession(key, record, freshKey, fresh) {
 		authFailure(w, portal.ErrDenied)
 		return
@@ -514,6 +520,7 @@ func renderAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key Ha
 	}
 	page.PortalHost = origin.Hostname()
 	_, page.CanAnswer = c.Session.config.Store.(commandReceipts)
+	page.CanAnswerGrant = apiv1.ValidAskUsername(username)
 	page.ClaimsNav = c.Claims != nil
 	body, policy, err := portal.RenderAsks(page, maximumResponse*7/8)
 	if err != nil {
@@ -564,7 +571,7 @@ func sameAskSession(key Handle, record Record, freshKey Handle, fresh Record) bo
 	return freshKey == key && fresh.Principal == record.Principal && sha256.Sum256([]byte(fresh.accessToken)) == sha256.Sum256([]byte(record.accessToken)) && subtle.ConstantTimeCompare([]byte(fresh.CSRF), []byte(record.CSRF)) == 1
 }
 
-func postAskAnswer(r *http.Request, c AssemblyConfig, key Handle, record Record, ask apiv1.Ask) error {
+func postAskAnswer(r *http.Request, c AssemblyConfig, key Handle, record Record, username string, ask apiv1.Ask) error {
 	store, ok := c.Session.config.Store.(commandReceipts)
 	if !ok {
 		return portal.ErrDenied
@@ -575,7 +582,13 @@ func postAskAnswer(r *http.Request, c AssemblyConfig, key Handle, record Record,
 	}
 	wantKeys := 5
 	request := apiv1.AskAnswerRequest{OptionID: r.PostForm.Get("optionId"), Text: apiv1.NormalizeAskText(r.PostForm.Get("text")), Actor: apiv1.AskActor{Issuer: record.Principal.Issuer, Subject: record.Principal.Subject}}
-	if ask.Type == apiv1.AskTypeApproval {
+	if ask.Type == apiv1.AskTypeGrant {
+		if !apiv1.ValidAskUsername(username) {
+			return portal.ErrDenied
+		}
+		request.Actor.Username = username
+	}
+	if ask.Type == apiv1.AskTypeApproval || ask.Type == apiv1.AskTypeGrant {
 		wantKeys = 7
 		if r.PostForm.Get("decision") != "approve" && r.PostForm.Get("decision") != "deny" {
 			return errAskDecision
@@ -606,8 +619,9 @@ func postAskAnswer(r *http.Request, c AssemblyConfig, key Handle, record Record,
 	encoded, err := json.Marshal(struct {
 		ID     string
 		Scope  *apiv1.AskScope
+		Grant  *apiv1.AskGrant `json:"Grant,omitempty"`
 		Answer apiv1.AskAnswerRequest
-	}{ask.ID, ask.Scope, request})
+	}{ask.ID, ask.Scope, ask.Grant, request})
 	if err != nil {
 		return portal.ErrDenied
 	}
@@ -620,8 +634,9 @@ func postAskAnswer(r *http.Request, c AssemblyConfig, key Handle, record Record,
 	if err != nil || reservation.RequestID != wanted.RequestID || reservation.SessionName != wanted.SessionName || reservation.SessionUID != wanted.SessionUID || reservation.Digest != wanted.Digest {
 		return portal.ErrDenied
 	}
-	freshRequest, freshKey, freshRecord, err := authorizedAction(c.Session, c.Authorizer, r)
-	if err != nil || !sameAskSession(key, record, freshKey, freshRecord) {
+	freshRequest, freshKey, freshRecord, freshUsername, err := authorizedAskAction(c, r)
+	if err != nil || !sameAskSession(key, record, freshKey, freshRecord) ||
+		(ask.Type == apiv1.AskTypeGrant && freshUsername != username) {
 		return portal.ErrDenied
 	}
 	if alreadyAnswered {
@@ -641,7 +656,9 @@ func postAskAnswer(r *http.Request, c AssemblyConfig, key Handle, record Record,
 }
 
 func sameAskAnswer(answer *apiv1.AskAnswer, request apiv1.AskAnswerRequest) bool {
-	return answer != nil && answer.OptionID == request.OptionID && answer.Text == request.Text && sameAskApproval(answer.Approved, request.Approved) && answer.AnsweredBy.Issuer == request.Actor.Issuer && answer.AnsweredBy.Subject == request.Actor.Subject
+	return answer != nil && answer.OptionID == request.OptionID && answer.Text == request.Text &&
+		sameAskApproval(answer.Approved, request.Approved) && answer.AnsweredBy.Issuer == request.Actor.Issuer &&
+		answer.AnsweredBy.Subject == request.Actor.Subject && answer.AnsweredBy.Username == request.Actor.Username
 }
 
 func parseAskForm(w http.ResponseWriter, r *http.Request, engine *Engine, record Record) error {
@@ -695,11 +712,24 @@ func askObject(raw []byte, required []string, optional ...string) (map[string]js
 }
 
 func strictAskJSON(raw []byte) bool {
-	fields, ok := askObject(raw, []string{"id", "type", "question", "recommended", "allowFreeText", "context", "createdAt", "expiresAt", "state"}, "options", "scope", "answer", "delivery")
+	fields, ok := askObject(raw, []string{"id", "type", "question", "recommended", "allowFreeText", "context", "createdAt", "state"}, "expiresAt", "options", "scope", "grant", "answer", "delivery")
 	if !ok {
 		return false
 	}
 	if _, ok := askObject(fields["context"], []string{"sessionName", "sessionUID"}, "workPackage", "links"); !ok {
+		return false
+	}
+	typ, _ := jsonString(fields["type"])
+	grant, hasGrant := fields["grant"]
+	_, hasExpiry := fields["expiresAt"]
+	if typ == string(apiv1.AskTypeGrant) {
+		if hasExpiry || !hasGrant {
+			return false
+		}
+		if _, ok := askObject(grant, []string{"uid", "scopeDigest", "type", "target", "ttl"}, "detail"); !ok {
+			return false
+		}
+	} else if !hasExpiry || hasGrant {
 		return false
 	}
 	if options, present := fields["options"]; present {
@@ -723,7 +753,7 @@ func strictAskJSON(raw []byte) bool {
 		if !ok {
 			return false
 		}
-		if _, ok := askObject(row["answeredBy"], nil, "issuer", "subject", "displayName"); !ok {
+		if _, ok := askObject(row["answeredBy"], nil, "issuer", "subject", "displayName", "username"); !ok {
 			return false
 		}
 	}

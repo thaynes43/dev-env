@@ -275,8 +275,8 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 		}
 	}
 	spec.TTL = metav1.Duration{Duration: ttl}
-	if typ == v1alpha1.GrantPodExec && (ttl < broker.MinTTL || ttl > broker.MaxPodExecTTL) {
-		add("ttl", "pod-exec requires a TTL from 10m to 60m")
+	if typ == v1alpha1.GrantPodExec && (ttl < broker.MinTTL || ttl > broker.MaxPodExecTTL || ttl%time.Second != 0) {
+		add("ttl", "pod-exec requires a TTL from 10m to 60m in whole seconds")
 	}
 	if typ == v1alpha1.GrantMaintenance && spec.Maintenance != nil {
 		if err := broker.ValidateMaintenance(&v1alpha1.AccessGrant{Spec: spec}); err != nil {

@@ -95,6 +95,9 @@ func checkCapabilities(g *v1alpha1.AccessGrant, proxmox, hwssh bool, reserved ..
 		if s.Requester.SessionUID == "" || target.PodUID == "" {
 			return errors.New("pod-exec requires the authenticated session and target pod UIDs")
 		}
+		if ttl%time.Second != 0 {
+			return errors.New("pod-exec TTL must use whole seconds")
+		}
 		return ValidatePodExecScope(target, reserved...)
 	}
 	if k := s.Kube; k != nil {

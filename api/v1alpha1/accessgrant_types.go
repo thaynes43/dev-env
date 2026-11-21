@@ -21,14 +21,14 @@ import (
 //     separately enabled exact reviewed bounds and authenticated reserved decisions;
 //   - a grant's TTL runs from 10 minutes (the shortest token TokenRequest issues)
 //     to its type's longest: 8 h for kube and egress, 4 h for credential, 1 h for
-//     break-glass;
+//     break-glass and pod-exec;
 //   - type breakglass goes with role dev-env-grant-breakglass, and only there;
 //   - the namespaced catalog roles name their namespaces one by one; the
 //     cluster-wide ones (nodes, break-glass) take none;
 //   - only role dev-env-grant-namespace-operator names Secrets, one to 16, each
 //     by name; no standing policy approves it, and an attested one only when it
 //     opts in with attested.allowSecretUse (DESIGN-042 5.1);
-//   - no policy approves break-glass, role dev-env-grant-breakglass or
+//   - no policy approves break-glass, pod-exec, role dev-env-grant-breakglass or
 //     dev-env-grant-secrets-read, or profile ops;
 //   - no standing policy approves maintenance: only an attested policy with an
 //     exact maintenance scope may (ADR-013);
@@ -40,7 +40,6 @@ import (
 
 // GrantType is what a grant gives (DESIGN-001 6.12). The LLM lease of 8.3
 // joins this list in plan 09.
-// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance;pod-exec
 type GrantType string
 
 const (
@@ -195,6 +194,7 @@ type AccessGrantSpec struct {
 	Requester GrantRequester `json:"requester"`
 
 	// Type is what the grant gives.
+	// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance;pod-exec
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only release may change"
 	// +required
 	Type GrantType `json:"type"`
@@ -242,7 +242,7 @@ type PodExecGrant struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Namespace string `json:"namespace"`
 	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	Pod string `json:"pod"`
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
@@ -574,6 +574,7 @@ type AdminCredentialStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: it names the grant's ServiceAccount and bindings"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^grant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="metadata.name is grant-<id>, a DNS label: it names the grant's ServiceAccount, and the audit log shows it"
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.startsWith('grant-pod-exec-') == (self.spec.type == 'pod-exec')",message="the grant-pod-exec name prefix is reserved for pod-exec grants"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.ask) || (has(self.status) && has(self.status.ask) && self.status.ask == oldSelf.status.ask)",message="the grant ask route is set once"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.askUnreadAt) || (has(self.status) && (!has(self.status.askUnreadAt) || self.status.askUnreadAt == oldSelf.status.askUnreadAt))",message="the grant ask unread time is set once per episode"
 type AccessGrant struct {
@@ -601,7 +602,6 @@ type AccessGrantList struct {
 // its scope lies inside the policy's scope, and its TTL is at most maxTTL.
 //
 // +kubebuilder:validation:XValidation:rule="self.type != 'breakglass'",message="no policy approves break-glass: authenticated human approval is required (D-27)"
-// +kubebuilder:validation:XValidation:rule="self.type != 'pod-exec'",message="pod-exec requires authenticated approval through the grant Ask"
 // +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || has(self.attested) || has(self.delegated)",message="no standing policy approves maintenance: only an attested or delegated policy may name a maintenance scope (ADR-013, DESIGN-042)"
 // +kubebuilder:validation:XValidation:rule="!has(self.delegated) || self.type != 'credential'",message="no delegated policy approves a credential: credential execution re-checks a policy approver (DESIGN-042 6.2)"
 // +kubebuilder:validation:XValidation:rule="!has(self.delegated) || !has(self.kube) || !self.kube.roles.exists(r, r == 'dev-env-grant-storage')",message="no delegated policy approves dev-env-grant-storage: destructive storage stays Tom's decision (DESIGN-042 RD4)"
@@ -672,6 +672,7 @@ type GrantPolicySpec struct {
 	Delegated *DelegatedRequesters `json:"delegated,omitempty"`
 
 	// Type is the grant type it approves.
+	// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance
 	// +required
 	Type GrantType `json:"type"`
 

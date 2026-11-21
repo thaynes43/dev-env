@@ -78,6 +78,46 @@ func credentialGrant() *v1alpha1.AccessGrant {
 	return g
 }
 
+func podExecGrant() *v1alpha1.AccessGrant {
+	g := kubeGrant()
+	g.Name = v1alpha1.PodExecGrantNamePrefix + strings.TrimPrefix(g.Name, "grant-")
+	g.Spec.Type, g.Spec.Kube = v1alpha1.GrantPodExec, nil
+	g.Spec.Requester.SessionUID = "11111111-1111-1111-1111-111111111111"
+	g.Spec.PodExec = &v1alpha1.PodExecGrant{Namespace: "frontend", Pod: "app.fixture", Container: "app", PodUID: "22222222-2222-2222-2222-222222222222"}
+	return g
+}
+
+func TestPodExecGrantSchema(t *testing.T) {
+	g := podExecGrant()
+	if err := k8s.Create(ctx(t), g); err != nil {
+		t.Fatal(err)
+	}
+	g.Spec.PodExec.Container = "other"
+	wantInvalid(t, k8s.Update(ctx(t), g), "immutable pod exec target")
+	for _, tc := range []struct {
+		name string
+		edit func(*v1alpha1.AccessGrant)
+		want string
+	}{
+		{"wrong prefix", func(g *v1alpha1.AccessGrant) { g.Name = grantName() }, "prefix is reserved"},
+		{"missing target", func(g *v1alpha1.AccessGrant) { g.Spec.PodExec = nil }, "podExec is set for type pod-exec"},
+		{"missing UID", func(g *v1alpha1.AccessGrant) { g.Spec.PodExec.PodUID = "" }, "spec.podExec.podUID"},
+		{"protected namespace", func(g *v1alpha1.AccessGrant) { g.Spec.PodExec.Namespace = "dev-env-admin-issuance" }, "outside the identity guard"},
+		{"long TTL", func(g *v1alpha1.AccessGrant) { g.Spec.TTL = ttl(time.Hour + time.Second) }, "at most one hour"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := podExecGrant()
+			tc.edit(g)
+			wantInvalid(t, k8s.Create(ctx(t), g), tc.want)
+		})
+	}
+	p := &v1alpha1.GrantPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "pod-exec-policy-fixture"},
+		Spec:       v1alpha1.GrantPolicySpec{Type: v1alpha1.GrantPodExec, Description: "synthetic", Profiles: []string{"full"}, MaxTTL: ttl(time.Hour)},
+	}
+	wantInvalid(t, k8s.Create(ctx(t), p), "spec.type")
+}
+
 func TestAccessGrantAccepts(t *testing.T) {
 	cases := []struct {
 		title  string

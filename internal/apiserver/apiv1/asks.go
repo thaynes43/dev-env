@@ -778,6 +778,11 @@ func validateAskUsername(t AskType, username string, required bool) error {
 	return nil
 }
 
+// ValidAskUsername reports whether a UserInfo username can identify a grant approver.
+func ValidAskUsername(username string) bool {
+	return askUsernamePattern.MatchString(username)
+}
+
 func validateAskLink(l string) error {
 	if len(l) == 0 || len(l) > AskLinkMaxLen {
 		return askInvalid("context.links", "each 1 to 300 bytes")
@@ -826,7 +831,7 @@ func validateAskAnswerShape(optionID, text string, actor AskActor, recorded bool
 	if err := askText("actor.displayName", actor.DisplayName, minFor(false, actor.DisplayName), AskActorDisplayNameMaxRunes, false); err != nil {
 		return err
 	}
-	if actor.Username != "" && (len(actor.Username) > AskActorUsernameMaxLen || !askUsernamePattern.MatchString(actor.Username)) {
+	if actor.Username != "" && !ValidAskUsername(actor.Username) {
 		return askInvalid("actor.username", "must match ^[A-Za-z0-9][A-Za-z0-9._@+-]{0,62}$")
 	}
 	if recorded && actor.DisplayName == "" && (actor.Issuer == "" || actor.Subject == "") {

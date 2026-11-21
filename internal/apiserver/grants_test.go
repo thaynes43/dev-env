@@ -88,6 +88,78 @@ func (f *fixture) request(tok string, req any, status int) apiv1.Grant {
 
 var grantNameRE = regexp.MustCompile(`^grant-1006-172226-[0-9a-f]{4}$`)
 
+func TestPodExecGrantRequest(t *testing.T) {
+	f := newFixture(t)
+	tok := f.sessionPod("session-fixture", "dev", 0)
+	target := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "fixture", Name: "target", UID: uuid.NewUUID()},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}},
+	}
+	ctx := t.Context()
+	if err := f.c.Create(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Pod); ok && key.Namespace != sessionNS {
+				reads++
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	req := apiv1.CreateGrantRequest{Type: apiv1.GrantTypePodExec, Namespaces: []string{target.Namespace}, Pod: target.Name, Container: "app", TTL: "60m", Reason: "inspect the process"}
+	got := f.request(tok, req, http.StatusCreated)
+	if reads != 1 || got.PodUID != string(target.UID) || !strings.HasPrefix(got.Name, v1alpha1.PodExecGrantNamePrefix) ||
+		got.Pod != target.Name || got.Container != req.Container || got.Phase != apiv1.GrantPending {
+		t.Fatalf("created %+v with %d pod reads", got, reads)
+	}
+	if stored := f.grant(got.Name).Spec.PodExec; stored == nil || stored.PodUID != string(target.UID) {
+		t.Fatalf("stored target %+v", stored)
+	}
+	if same := f.request(tok, req, http.StatusOK); same.Name != got.Name {
+		t.Fatal("identical target did not merge")
+	}
+	other := req
+	other.Container = "sidecar"
+	f.request(tok, other, http.StatusCreated)
+	if err := f.c.Delete(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	replacement := target.DeepCopy()
+	replacement.ResourceVersion, replacement.UID = "", uuid.NewUUID()
+	if err := f.c.Create(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if next := f.request(tok, req, http.StatusCreated); next.Name == got.Name || next.PodUID != string(replacement.UID) {
+		t.Fatalf("replacement reused the old scope: %+v", next)
+	}
+	for _, tc := range []struct {
+		name   string
+		edit   func(*apiv1.CreateGrantRequest)
+		status int
+		reads  int
+	}{
+		{"protected dev-env", func(r *apiv1.CreateGrantRequest) { r.Namespaces = []string{"dev-agents"} }, http.StatusUnprocessableEntity, 0},
+		{"protected controller", func(r *apiv1.CreateGrantRequest) { r.Namespaces = []string{"cert-manager"} }, http.StatusUnprocessableEntity, 0},
+		{"outside Kyverno", func(r *apiv1.CreateGrantRequest) { r.Namespaces = []string{"kube-public"} }, http.StatusUnprocessableEntity, 0},
+		{"long TTL", func(r *apiv1.CreateGrantRequest) { r.TTL = "60m1s" }, http.StatusUnprocessableEntity, 0},
+		{"missing container name", func(r *apiv1.CreateGrantRequest) { r.Container = "" }, http.StatusUnprocessableEntity, 0},
+		{"missing container", func(r *apiv1.CreateGrantRequest) { r.Container = "missing" }, http.StatusForbidden, 1},
+		{"missing pod", func(r *apiv1.CreateGrantRequest) { r.Pod = "missing" }, http.StatusForbidden, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := req
+			tc.edit(&r)
+			before := reads
+			w := f.do(http.MethodPost, apiv1.GrantsPath, tok, r)
+			if w.Code != tc.status || reads-before != tc.reads || f.grantCount() != 3 {
+				t.Fatalf("status %d, reads %d: %s", w.Code, reads-before, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestGrantRequest(t *testing.T) {
 	f := newFixture(t)
 	f.srv.GrantApprovalURL = "https://dev-env.example.com/grants"

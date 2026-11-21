@@ -494,7 +494,7 @@ spec:
                     type: string
                   pod:
                     maxLength: 253
-                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
                   podUID:
                     maxLength: 36
@@ -996,6 +996,9 @@ spec:
         - message: 'metadata.name is grant-<id>, a DNS label: it names the grant''s
             ServiceAccount, and the audit log shows it'
           rule: self.metadata.name.matches('^grant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+        - message: the grant-pod-exec name prefix is reserved for pod-exec grants
+          rule: self.metadata.name.startsWith('grant-pod-exec-') == (self.spec.type
+            == 'pod-exec')
         - message: the grant ask route is set once
           rule: '!has(oldSelf.status) || !has(oldSelf.status.ask) || (has(self.status)
             && has(self.status.ask) && self.status.ask == oldSelf.status.ask)'
