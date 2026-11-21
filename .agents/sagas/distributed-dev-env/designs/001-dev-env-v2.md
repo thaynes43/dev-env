@@ -3760,10 +3760,20 @@ credential. Its per-grant Role can get that pod and create its exec
 connection. Kyverno checks the exact container and live pod UID for each new
 connection, and requires an active, unexpired grant.
 
+The operator and broker each need cluster-wide named Pod reads for the UID
+checks. The broker needs get, create and delete on Roles and holds
+`create pods/exec` in RBAC so Kubernetes lets it delegate that permission.
+The broker admission guard keeps direct exec in `dev-agents` and permits
+only a one-pod Role and a same-name RoleBinding to its own grant
+ServiceAccount. Install and verify that guard before widening the broker's
+RBAC. Kyverno uses its existing named AccessGrant lookup in `dev-agents`.
+
 Expiry, release or session end removes the RoleBinding, Role and ServiceAccount.
-A shell opened before expiry can stay open after the grant ends. The CRD and
-admission policies must be installed before enabling the existing grant Ask
-route for this feature.
+A shell opened before expiry can stay open after the grant ends. The UID
+check happens at admission. Kubernetes resolves the pod name again when
+opening the connection, which leaves a race if the pod is replaced between
+those steps. Install the CRDs and check both admission guards and the existing
+grant Ask prerequisites before activation.
 
 **S6 source amendment, 2026-10-31 (ADR-014).** Attested maintenance requires the live requester's explicit depth label `0` and a creator in `--attested-maintenance-creators`; an unset list follows the configured maintenance human ServiceAccount, and an explicitly empty list admits none. Children, missing parents and missing or malformed depth fail closed. Approval, executor creation and active rechecks share this eligibility rule. Creator removal ends the approval and uses the termination-proof cleanup tail. This grants no runtime activation and does not require a human approval actor. See [ADR-014](../adrs/014-attested-maintenance-creators.md).
 
