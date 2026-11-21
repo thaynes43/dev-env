@@ -118,11 +118,13 @@ func retryablePodRead(err error) bool {
 		}
 		return false
 	}
+	var dnsErr *net.DNSError
 	var netErr net.Error
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		utilnet.IsConnectionRefused(err) || utilnet.IsConnectionReset(err) ||
 		utilnet.IsProbableEOF(err) || utilnet.IsHTTP2ConnectionLost(err) ||
-		(errors.As(err, &netErr) && netErr.Timeout())
+		(errors.As(err, &netErr) && netErr.Timeout()) ||
+		(errors.As(err, &dnsErr) && dnsErr.IsTemporary)
 }
 
 func podHasPrivilegedContainer(pod *corev1.Pod) bool {

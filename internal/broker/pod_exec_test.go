@@ -3,6 +3,8 @@ package broker
 import (
 	"context"
 	"errors"
+	"net"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -49,7 +51,7 @@ func podExecAskFixture(t *testing.T) (*grantAskFixture, *corev1.Pod) {
 }
 
 func TestPodExecAskApprovalAndCleanup(t *testing.T) {
-	for _, end := range []string{"expiry", "release", "session ended", "pod replaced"} {
+	for _, end := range []string{"expiry", "release", "session ended", "pod replaced", "pod read forbidden"} {
 		t.Run(end, func(t *testing.T) {
 			f, pod := podExecAskFixture(t)
 			f.openAsk()
@@ -97,6 +99,10 @@ func TestPodExecAskApprovalAndCleanup(t *testing.T) {
 				}
 			case "pod replaced":
 				replacePodExecFixture(t, f, pod)
+				wantPhase = v1alpha1.GrantFailed
+			case "pod read forbidden":
+				f.b.APIReader = &podExecFaultClient{Client: f.meta, podReadError: apierrors.NewForbidden(
+					corev1.Resource("pods"), pod.Name, errors.New("synthetic access refusal"))}
 				wantPhase = v1alpha1.GrantFailed
 			}
 			f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == wantPhase })
@@ -188,7 +194,9 @@ func TestPodExecAskTargetReadErrors(t *testing.T) {
 	}{
 		{"forbidden", apierrors.NewForbidden(corev1.Resource("pods"), "fixture", errors.New("synthetic access refusal")), "is forbidden"},
 		{"bad request", apierrors.NewBadRequest("synthetic invalid read"), "synthetic invalid read"},
+		{"DNS name not found", &net.DNSError{Err: "no such host", IsNotFound: true}, "no such host"},
 		{"retryable service unavailable", apierrors.NewServiceUnavailable("synthetic outage"), ""},
+		{"retryable DNS failure", &url.Error{Op: "Get", Err: &net.DNSError{Err: "server misbehaving", IsTemporary: true}}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, _ := podExecAskFixture(t)

@@ -3765,6 +3765,10 @@ credential. Its per-grant Role can get that pod and create its exec
 connection. Kyverno checks the exact container and live pod UID for each new
 connection, and requires an active, unexpired grant.
 
+A permanent pod read error denies a pending grant or revokes and fails an
+active grant. The broker retries recognized temporary API or transport
+failures, including temporary DNS errors. Unclassified errors fail closed.
+
 Replacing the target pod does not trigger a broker reconcile. Its name-based
 Role can remain until the next reconcile or expiry. Kyverno refuses new
 connections to a replacement UID during that time.
