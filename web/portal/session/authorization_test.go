@@ -42,11 +42,11 @@ func TestCurrentUserInfoStrictClaims(t *testing.T) {
 		`{"sub":"synthetic-subject","portal_is_active":true}`,
 		`{"sub":"synthetic-subject","portal_is_admin":true}`,
 	} {
-		if validUserInfo([]byte(body), "synthetic-subject") {
+		if _, allowed := parseUserInfo([]byte(body), "synthetic-subject"); allowed {
 			t.Fatal("malformed or denied current claims accepted")
 		}
 	}
-	if !validUserInfo([]byte(currentAllow), "synthetic-subject") {
+	if _, allowed := parseUserInfo([]byte(currentAllow), "synthetic-subject"); !allowed {
 		t.Fatal("well-typed current claims denied")
 	}
 }

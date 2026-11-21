@@ -198,6 +198,8 @@ func (b *Broker) decisionAllowed(ctx context.Context, g *v1alpha1.AccessGrant, d
 		return 0, fmt.Errorf("%w: grant %s was released", ErrNotPending, g.Name)
 	case d.By == "":
 		return 0, fmt.Errorf("%w: no approver", ErrRefused)
+	case g.Spec.Type == v1alpha1.GrantPodExec && g.Status.Ask == "":
+		return 0, fmt.Errorf("%w: pod-exec requires a bound grant Ask", ErrRefused)
 	}
 	// The route is on the object this attempt will write. A routed grant is
 	// approved only as the answer of that Ask. A read error is returned so
@@ -249,6 +251,14 @@ func (b *Broker) decisionAllowed(ctx context.Context, g *v1alpha1.AccessGrant, d
 	}
 	if err := check(g, b.SessionNamespace, b.PolicyNamespace); err != nil {
 		return 0, fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	if target := g.Spec.PodExec; target != nil {
+		if _, err := readPodExecTarget(ctx, b.APIReader, target); err != nil {
+			if p := (permanent{}); errors.As(err, &p) {
+				return 0, fmt.Errorf("%w: %w", ErrRefused, err)
+			}
+			return 0, err
+		}
 	}
 	ttl := d.TTL
 	if ttl == 0 {

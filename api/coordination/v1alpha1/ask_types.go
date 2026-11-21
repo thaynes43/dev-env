@@ -159,10 +159,11 @@ type AskGrant struct {
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]{43}$`
 	ScopeDigest string `json:"scopeDigest"`
 	// Type is the grant's type.
-	// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance
+	// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance;pod-exec
 	// +kubebuilder:validation:MaxLength=11
 	Type string `json:"type"`
-	// Target is one token, 1 to 200 runes. The byte ceiling is four bytes per rune.
+	// Target is one token, up to 253 ASCII characters for a pod name or up to
+	// 200 runes for other grant types. The byte ceiling accommodates Unicode.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=800
 	Target string `json:"target"`

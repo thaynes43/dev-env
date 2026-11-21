@@ -13,6 +13,8 @@ const (
 	// GrantTypeKube is a catalog role in named namespaces, or cluster-wide for
 	// dev-env-grant-nodes.
 	GrantTypeKube = "kube"
+	// GrantTypePodExec is a shell lease for one pod and container.
+	GrantTypePodExec = "pod-exec"
 	// GrantTypeEgress is destinations for the session's pod.
 	GrantTypeEgress = "egress"
 	// GrantTypeCredential is a short-lived credential in the session's pod
@@ -56,7 +58,7 @@ const (
 // profile, agent and parent from the caller's token (D-25). Each type takes its
 // own fields, and a field of another type is refused: kube and breakglass take
 // role and namespaces; egress takes fqdns, cidrs, endpoints and ports;
-// credential takes credential.
+// credential takes credential; pod-exec takes one namespace, pod and container.
 type CreateGrantRequest struct {
 	Reserved bool `json:"reserved,omitempty"`
 	// AllNamespaces is reserved RD3b, Secret-read role only, default false.
@@ -64,7 +66,7 @@ type CreateGrantRequest struct {
 	// StorageTargets are exact RD4 storage kind/name/UIDs in one namespace.
 	StorageTargets []GrantStorageTarget `json:"storageTargets,omitempty"`
 	Maintenance    *MaintenanceTask     `json:"maintenance,omitempty"`
-	// Type is kube, egress, credential or breakglass.
+	// Type is kube, egress, credential, breakglass, maintenance or pod-exec.
 	Type string `json:"type"`
 	// Role is a role from the grant catalog, for type kube. Break-glass is
 	// always dev-env-grant-breakglass: leave it empty.
@@ -72,6 +74,9 @@ type CreateGrantRequest struct {
 	// Namespaces are where a namespaced role is bound, each named. The
 	// cluster-wide roles (nodes, break-glass) take none.
 	Namespaces []string `json:"namespaces,omitempty"`
+	// Pod and Container select a pod-exec target. The server resolves the UID.
+	Pod       string `json:"pod,omitempty"`
+	Container string `json:"container,omitempty"`
 	// Secrets are the Secrets a dev-env-grant-namespace-operator grant will
 	// use, 1 to 16 Secret names (DNS-1123 subdomains), none twice; required
 	// for that role and refused for every other (DESIGN-042 5.1). They hold in
@@ -118,6 +123,9 @@ const GrantTaskClaimsV1 = "v1"
 // Grant is one grant as the API shows it: GET /v1/grants/{name}, the items of
 // GET /v1/grants, and the answer to a request or a release.
 type Grant struct {
+	Pod              string                   `json:"pod,omitempty"`
+	Container        string                   `json:"container,omitempty"`
+	PodUID           string                   `json:"podUID,omitempty"`
 	ReservedDecision *ReservedDecisionBinding `json:"reservedDecision,omitempty"`
 	Reserved         bool                     `json:"reserved,omitempty"`
 	AllNamespaces    bool                     `json:"allNamespaces,omitempty"`

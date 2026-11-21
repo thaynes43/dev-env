@@ -156,7 +156,8 @@ func SameClaim(a, b Statement) bool {
 
 // ScopeDigest is the digest of what the grant asks for: its type, its credential
 // or role and namespaces or egress destinations and ports, or its whole
-// maintenance envelope (ADR-013), its TTL, and the requesting session. Lists are
+// maintenance envelope (ADR-013) or pod-exec target and security snapshot,
+// its TTL, and the requesting session. Lists are
 // sorted and defaults made explicit, so equal requests give equal digests and
 // any change in scope or TTL changes it. A grant without a maintenance envelope
 // digests exactly as before the envelope was added. A kube grant's named
@@ -186,10 +187,12 @@ func ScopeDigest(g *v1alpha1.AccessGrant) string {
 		Ports          []port                        `json:"ports,omitempty"`
 		// Maintenance is omitted when absent, so other grants keep their digest.
 		Maintenance *v1alpha1.MaintenanceTask `json:"maintenance,omitempty"`
+		PodExec     *v1alpha1.PodExecGrant    `json:"podExec,omitempty"`
 		TTL         string                    `json:"ttl"`
 		Session     string                    `json:"session"`
 		SessionUID  string                    `json:"sessionUID"`
 	}{Type: string(g.Spec.Type), TTL: g.Spec.TTL.Duration.String(), Session: g.Spec.Requester.Session, SessionUID: string(g.Spec.Requester.SessionUID)}
+	doc.PodExec = g.Spec.PodExec
 	if c := g.Spec.Credential; c != nil {
 		doc.Credential = string(c.Name)
 	}

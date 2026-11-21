@@ -16,11 +16,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/grantattest"
 )
 
 // kubeReq is a valid kube grant request.
@@ -87,6 +89,103 @@ func (f *fixture) request(tok string, req any, status int) apiv1.Grant {
 }
 
 var grantNameRE = regexp.MustCompile(`^grant-1006-172226-[0-9a-f]{4}$`)
+
+func TestPodExecGrantRequest(t *testing.T) {
+	f := newFixture(t)
+	tok := f.sessionPod("session-fixture", "dev", 0)
+	target := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "frontend", Name: "target", UID: uuid.NewUUID()},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: "headlamp",
+			HostPID:            true,
+			Containers:         []corev1.Container{{Name: "app"}, {Name: "sidecar"}},
+			InitContainers:     []corev1.Container{{Name: "init", SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)}}},
+		},
+	}
+	ctx := t.Context()
+	if err := f.c.Create(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Pod); ok && key.Namespace != sessionNS {
+				reads++
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	req := apiv1.CreateGrantRequest{Type: apiv1.GrantTypePodExec, Namespaces: []string{target.Namespace}, Pod: target.Name, Container: "app", TTL: "60m", Reason: "inspect the process"}
+	got := f.request(tok, req, http.StatusCreated)
+	if reads != 1 || got.PodUID != string(target.UID) || !strings.HasPrefix(got.Name, v1alpha1.PodExecGrantNamePrefix) ||
+		got.Pod != target.Name || got.Container != req.Container || got.Phase != apiv1.GrantPending {
+		t.Fatalf("created %+v with %d pod reads", got, reads)
+	}
+	grant := f.grant(got.Name)
+	stored := grant.Spec.PodExec
+	wantSecurity := v1alpha1.PodExecTargetSecurity{Privileged: true, HostPID: true, PowerfulServiceAccount: true}
+	if stored == nil || stored.PodUID != string(target.UID) || stored.Security == nil || *stored.Security != wantSecurity {
+		t.Fatalf("stored target %+v", stored)
+	}
+	digest := grantattest.ScopeDigest(grant)
+	for _, clear := range []func(*v1alpha1.PodExecTargetSecurity){
+		func(s *v1alpha1.PodExecTargetSecurity) { s.Privileged = false },
+		func(s *v1alpha1.PodExecTargetSecurity) { s.HostPID = false },
+		func(s *v1alpha1.PodExecTargetSecurity) { s.PowerfulServiceAccount = false },
+	} {
+		changed := grant.DeepCopy()
+		clear(changed.Spec.PodExec.Security)
+		if grantattest.ScopeDigest(changed) == digest {
+			t.Fatalf("security change did not change the digest: %+v", changed.Spec.PodExec.Security)
+		}
+	}
+	if same := f.request(tok, req, http.StatusOK); same.Name != got.Name {
+		t.Fatal("identical target did not merge")
+	}
+	other := req
+	other.Container = "sidecar"
+	f.request(tok, other, http.StatusCreated)
+	if err := f.c.Delete(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	replacement := target.DeepCopy()
+	replacement.ResourceVersion, replacement.UID = "", uuid.NewUUID()
+	replacement.Spec.HostPID, replacement.Spec.ServiceAccountName, replacement.Spec.InitContainers = false, "default", nil
+	if err := f.c.Create(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	next := f.request(tok, req, http.StatusCreated)
+	if next.Name == got.Name || next.PodUID != string(replacement.UID) {
+		t.Fatalf("replacement reused the old scope: %+v", next)
+	}
+	if security := f.grant(next.Name).Spec.PodExec.Security; security == nil || *security != (v1alpha1.PodExecTargetSecurity{}) {
+		t.Fatalf("replacement security snapshot = %+v", security)
+	}
+	for _, tc := range []struct {
+		name   string
+		edit   func(*apiv1.CreateGrantRequest)
+		status int
+		reads  int
+	}{
+		{"protected dev-env", func(r *apiv1.CreateGrantRequest) { r.Namespaces = []string{"dev-agents"} }, http.StatusUnprocessableEntity, 0},
+		{"protected controller", func(r *apiv1.CreateGrantRequest) { r.Namespaces = []string{"cert-manager"} }, http.StatusUnprocessableEntity, 0},
+		{"outside Kyverno", func(r *apiv1.CreateGrantRequest) { r.Namespaces = []string{"kube-public"} }, http.StatusUnprocessableEntity, 0},
+		{"long TTL", func(r *apiv1.CreateGrantRequest) { r.TTL = "60m1s" }, http.StatusUnprocessableEntity, 0},
+		{"missing container name", func(r *apiv1.CreateGrantRequest) { r.Container = "" }, http.StatusUnprocessableEntity, 0},
+		{"missing container", func(r *apiv1.CreateGrantRequest) { r.Container = "missing" }, http.StatusForbidden, 1},
+		{"missing pod", func(r *apiv1.CreateGrantRequest) { r.Pod = "missing" }, http.StatusForbidden, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := req
+			tc.edit(&r)
+			before := reads
+			w := f.do(http.MethodPost, apiv1.GrantsPath, tok, r)
+			if w.Code != tc.status || reads-before != tc.reads || f.grantCount() != 3 {
+				t.Fatalf("status %d, reads %d: %s", w.Code, reads-before, w.Body.String())
+			}
+		})
+	}
+}
 
 func TestGrantRequest(t *testing.T) {
 	f := newFixture(t)

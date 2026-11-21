@@ -107,8 +107,9 @@ spec:
                     pattern: ^[A-Za-z0-9_-]{43}$
                     type: string
                   target:
-                    description: Target is one token, 1 to 200 runes. The byte ceiling
-                      is four bytes per rune.
+                    description: |-
+                      Target is one token, up to 253 ASCII characters for a pod name or up to
+                      200 runes for other grant types. The byte ceiling accommodates Unicode.
                     maxLength: 800
                     minLength: 1
                     type: string
@@ -128,6 +129,7 @@ spec:
                     - credential
                     - breakglass
                     - maintenance
+                    - pod-exec
                     maxLength: 11
                     type: string
                   uid:

@@ -3743,6 +3743,58 @@ its name because a ClusterRoleBinding's `roleRef` cannot change.
 
 ### 6.12 Access: no prompts in the pod, control at the platform
 
+#### Pod shell grants (OpenProject #945)
+
+A session can ask to open a shell in one named container of an existing pod,
+including a pod the Kyverno exec guard normally refuses. The operator reads the
+pod once and stores its UID with the namespace, pod name and container name.
+The same read records whether the pod has a privileged container, uses host
+PID or runs as a ServiceAccount on the exec guard's privileged list. These
+request-time facts are immutable and included in the approval's scope digest.
+The card identifies them as a snapshot. An ephemeral container can be added
+later without changing the pod UID.
+The request uses the kube grant TTL range of 10 to 60 minutes. The dev-env
+identity guard's protected namespaces and namespaces skipped by Kyverno are
+outside this route.
+
+The grant Ask shows the namespace, pod, container, security facts, reason and
+time allowed for new connections. Any portal admin can answer. The broker
+records the approver as `authentik/<preferred_username>` and binds approval to
+that pod UID.
+Standing policies, attestations and delegates cannot approve a pod shell grant.
+The broker checks the target again and installs the usual short-lived kube
+credential. Its per-grant Role can get that pod and create its exec
+connection. Kyverno checks the exact container and live pod UID for each new
+connection, and requires an active, unexpired grant.
+
+A permanent pod read error denies a pending grant or revokes and fails an
+active grant. The broker retries recognized temporary API or transport
+failures, including temporary DNS errors. Unclassified errors fail closed.
+
+Replacing the target pod does not trigger a broker reconcile. Its name-based
+Role can remain until the next reconcile or expiry. Kyverno refuses new
+connections to a replacement UID during that time.
+
+The operator and broker each need cluster-wide named Pod reads for the UID
+checks. The broker needs get, create and delete on Roles and holds
+`create pods/exec` in RBAC so Kubernetes lets it delegate that permission.
+The broker admission guard keeps direct exec in `dev-agents` and permits
+only a one-pod Role and a same-name RoleBinding to its own grant
+ServiceAccount. Install and verify that guard before widening the broker's
+RBAC. Kyverno uses its existing named AccessGrant lookup in `dev-agents`.
+
+Expiry, release or session end removes the ServiceAccount first, then the
+RoleBinding and Role. The deadline stops new shells. A shell opened before
+the deadline keeps running until it is closed.
+
+**Q-945-01, 2026-11-21.** Tom approved that limit on his phone. His answer
+was “Fine, home lab (Recommended)”.
+
+Pod replacement between admission and stream setup is a known race. The UID
+check runs at admission, and Kubernetes resolves the pod name again when it
+opens the stream. Install the CRDs and check both admission guards and the
+existing grant Ask prerequisites before activation.
+
 **S6 source amendment, 2026-10-31 (ADR-014).** Attested maintenance requires the live requester's explicit depth label `0` and a creator in `--attested-maintenance-creators`; an unset list follows the configured maintenance human ServiceAccount, and an explicitly empty list admits none. Children, missing parents and missing or malformed depth fail closed. Approval, executor creation and active rechecks share this eligibility rule. Creator removal ends the approval and uses the termination-proof cleanup tail. This grants no runtime activation and does not require a human approval actor. See [ADR-014](../adrs/014-attested-maintenance-creators.md).
 
 Tom (2026-10-06): agents should skip permission prompts for their own vendor's tools,

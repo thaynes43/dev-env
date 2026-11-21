@@ -231,9 +231,12 @@ func (b *Broker) decideGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, as
 		d.Reason = ask.Status.Answer.Text
 	}
 	err := b.decideGrant(ctx, g.Name, d)
+	var targetErr permanent
 	switch {
 	case err == nil, errors.Is(err, ErrNotPending):
 		return reconcile.Result{}, nil
+	case g.Spec.Type == v1alpha1.GrantPodExec && errors.As(err, &targetErr):
+		return b.denyPendingGrant(ctx, g, targetErr.Error(), now)
 	case errors.Is(err, ErrRefused):
 		return b.denyPendingGrant(ctx, g, "the answer could not be applied", now)
 	default:
@@ -1031,6 +1034,11 @@ func grantAskTarget(g *v1alpha1.AccessGrant) (string, bool) {
 			return "", false
 		}
 		target = g.Spec.Kube.Role
+	case v1alpha1.GrantPodExec:
+		if g.Spec.PodExec == nil {
+			return "", false
+		}
+		target = g.Spec.PodExec.Pod
 	case v1alpha1.GrantCredential:
 		if g.Spec.Credential == nil {
 			return "", false
@@ -1044,7 +1052,7 @@ func grantAskTarget(g *v1alpha1.AccessGrant) (string, bool) {
 		return "", false
 	}
 	n := utf8.RuneCountInString(target)
-	if n < 1 || n > apiv1.AskScopeFieldMaxRunes {
+	if n < 1 || n > apiv1.AskGrantTargetMaxRunes(string(g.Spec.Type)) {
 		return "", false
 	}
 	return target, true
@@ -1072,6 +1080,24 @@ func grantAskDetail(g *v1alpha1.AccessGrant) (string, bool) {
 		detail = kubeAskDetail(g.Spec.Kube)
 	case v1alpha1.GrantEgress:
 		detail = egressAskDetail(g.Spec.Egress)
+	case v1alpha1.GrantPodExec:
+		target := g.Spec.PodExec
+		if target == nil {
+			return "", false
+		}
+		if security := target.Security; security != nil {
+			yesNo := func(v bool) string {
+				if v {
+					return "yes"
+				}
+				return "no"
+			}
+			detail = fmt.Sprintf("Shell in %s (%s). Privileged: %s, host PID: %s, powerful ServiceAccount: %s",
+				target.Container, target.Namespace, yesNo(security.Privileged), yesNo(security.HostPID), yesNo(security.PowerfulServiceAccount))
+		} else {
+			// Keep the text of Asks written before security was captured.
+			detail = "Open a shell in container " + target.Container + " in namespace " + target.Namespace
+		}
 	}
 	if utf8.RuneCountInString(detail) > apiv1.AskScopeFieldMaxRunes {
 		return "", false

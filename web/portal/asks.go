@@ -72,7 +72,7 @@ func init() {
 type AsksPage struct {
 	ClaimsNav                                                                 bool
 	Asks                                                                      []apiv1.Ask
-	Connected, Complete, CanAnswer, Preview, Retry, ReadOnly                  bool
+	Connected, Complete, CanAnswer, CanAnswerGrant, Preview, Retry, ReadOnly  bool
 	Notice, CSRF, PortalHost, SelectedID, OlderHref, HistoryNotice, RetryHref string
 	AnswerErrorID, AnswerError, AnswerText, AnswerOption                      string
 	Now                                                                       time.Time
@@ -86,8 +86,9 @@ type askCard struct {
 	CreatedAt, CreatedLabel, ExpiresAt, ExpiresLabel                                     string
 	ScopeExpiresAt, ScopeExpiresLabel, AnsweredAt, AnsweredLabel, AnswerOption, Answerer string
 	AnswerError, AnswerText, SelectedOption                                              string
+	GrantDuration                                                                        string
 	Links                                                                                []askLink
-	Approval, Approved, ApprovalValid, CanAnswer, Preview                                bool
+	Approval, Decision, Approved, ApprovalValid, CanAnswer, Preview                      bool
 }
 
 func askContextLink(raw, portalHost string) askLink {
@@ -147,6 +148,10 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 			if ask.Scope != nil {
 				card.ScopeExpiresAt, card.ScopeExpiresLabel = askTime(ask.Scope.ExpiresAt)
 			}
+			card.Decision = card.Approval || ask.Grant != nil
+			if ask.Grant != nil {
+				card.GrantDuration = askGrantDuration(ask.Grant.TTL)
+			}
 			for _, link := range ask.Context.Links {
 				card.Links = append(card.Links, askContextLink(link, page.PortalHost))
 			}
@@ -155,6 +160,9 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 			}
 			open := card.State == string(apiv1.AskStateOpen)
 			card.CanAnswer = open && !page.ReadOnly && (page.Preview || (page.CanAnswer && page.CSRF != ""))
+			if ask.Grant != nil && !page.Preview {
+				card.CanAnswer = card.CanAnswer && page.CanAnswerGrant
+			}
 			if card.CanAnswer && !page.Preview {
 				var nonce [32]byte
 				if _, err := rand.Read(nonce[:]); err != nil {
@@ -211,4 +219,27 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 
 func askTime(at time.Time) (string, string) {
 	return at.UTC().Format(time.RFC3339), at.UTC().Format("2 Jan 2006, 15:04 UTC")
+}
+
+func askGrantDuration(raw string) string {
+	duration, err := time.ParseDuration(raw)
+	if err != nil || duration <= 0 {
+		return raw
+	}
+	parts := make([]string, 0, 3)
+	for _, unit := range []struct {
+		value time.Duration
+		name  string
+	}{{time.Hour, "hour"}, {time.Minute, "minute"}, {time.Second, "second"}} {
+		n := duration / unit.value
+		if n > 0 {
+			name := unit.name
+			if n != 1 {
+				name += "s"
+			}
+			parts = append(parts, strconv.FormatInt(int64(n), 10)+" "+name)
+			duration %= unit.value
+		}
+	}
+	return strings.Join(parts, " ")
 }

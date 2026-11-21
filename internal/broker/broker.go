@@ -527,6 +527,17 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	if g.Spec.Type == v1alpha1.GrantCredential {
 		return b.activeCredential(ctx, g, sess, now)
 	}
+	if target := g.Spec.PodExec; target != nil {
+		if g.Status.Ask == "" || !strings.HasPrefix(g.Status.ApprovedBy, "authentik/") {
+			return b.end(ctx, g, v1alpha1.GrantFailed, "", "pod-exec has no authenticated grant Ask approval", now)
+		}
+		if _, err := readPodExecTarget(ctx, b.APIReader, target); err != nil {
+			if p := (permanent{}); errors.As(err, &p) {
+				return b.end(ctx, g, v1alpha1.GrantFailed, "", err.Error(), now)
+			}
+			return ctrl.Result{}, err
+		}
+	}
 	if g.Spec.Kube != nil && (g.Spec.Kube.Reserved || g.Spec.Kube.AllNamespaces || len(g.Spec.Kube.StorageTargets) > 0 || g.Status.Reserved != nil) && (g.Status.Reserved == nil || !strings.HasPrefix(g.Status.ApprovedBy, DelegateApprover)) {
 		return b.end(ctx, g, v1alpha1.GrantFailed, "", "reserved scope has no bound authenticated delegate approval", now)
 	}
@@ -558,14 +569,14 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 		log.FromContext(ctx).Info("made the grant", append(grantFields(g), "made", made)...)
 		b.event(g, corev1.EventTypeNormal, "Make", "Made", "made "+strings.Join(made, ", "))
 	}
-	if (g.Spec.Type == v1alpha1.GrantEgress || b.adminLease(g)) && !b.Clock.Now().Before(expires) {
+	if (g.Spec.Type == v1alpha1.GrantEgress || g.Spec.Type == v1alpha1.GrantPodExec || b.adminLease(g)) && !b.Clock.Now().Before(expires) {
 		// Materialization can cross expiry if the API server was slow. Revoke
 		// immediately rather than schedule from the time before the create.
 		return b.end(ctx, g, v1alpha1.GrantExpired, "", "", b.now())
 	}
 	res := ctrl.Result{RequeueAfter: expires.Sub(now.Time)}
 	changed := false
-	if g.Spec.Kube != nil {
+	if g.Spec.Kube != nil || g.Spec.PodExec != nil {
 		changed = g.Status.ServiceAccount != g.Name
 		if b.Installer != nil {
 			if pod := b.sessionPod(ctx, sess, true); pod != nil {
@@ -933,7 +944,7 @@ func grantLabels(g *v1alpha1.AccessGrant) map[string]string {
 		v1alpha1.LabelSession:   g.Spec.Requester.Session,
 		v1alpha1.LabelManagedBy: ManagedBy,
 	}
-	if g.Status.Reserved != nil {
+	if g.Status.Reserved != nil || g.Spec.PodExec != nil {
 		labels[v1alpha1.LabelPrefix+"grant-uid"] = string(g.UID)
 	}
 	return labels

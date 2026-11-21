@@ -52,10 +52,14 @@ func NewExecInstaller(cfg *rest.Config) (*ExecInstaller, error) {
 // Install implements Installer. The pod UID is checked by agentd before it
 // reads the token, fencing a replacement pod that has the same name.
 func (e *ExecInstaller) Install(ctx context.Context, pod *corev1.Pod, g *v1alpha1.AccessGrant, token string, expires time.Time) error {
-	if g.Spec.Kube == nil || token == "" {
+	if (g.Spec.Kube == nil && g.Spec.PodExec == nil) || token == "" {
 		return errors.New("the kube grant or its token is missing")
 	}
-	cmd := agentprotocol.GrantInstallCommand(g.Name, g.Spec.Kube.Role, bindingNamespaces(g), expires, string(pod.UID))
+	role := g.Name // pod-exec uses a namespaced Role named after the grant
+	if g.Spec.Kube != nil {
+		role = g.Spec.Kube.Role
+	}
+	cmd := agentprotocol.GrantInstallCommand(g.Name, role, bindingNamespaces(g), expires, string(pod.UID))
 	return e.run(ctx, pod, cmd, strings.NewReader(token+"\n"))
 }
 

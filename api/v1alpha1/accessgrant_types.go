@@ -21,14 +21,14 @@ import (
 //     separately enabled exact reviewed bounds and authenticated reserved decisions;
 //   - a grant's TTL runs from 10 minutes (the shortest token TokenRequest issues)
 //     to its type's longest: 8 h for kube and egress, 4 h for credential, 1 h for
-//     break-glass;
+//     break-glass and pod-exec;
 //   - type breakglass goes with role dev-env-grant-breakglass, and only there;
 //   - the namespaced catalog roles name their namespaces one by one; the
 //     cluster-wide ones (nodes, break-glass) take none;
 //   - only role dev-env-grant-namespace-operator names Secrets, one to 16, each
 //     by name; no standing policy approves it, and an attested one only when it
 //     opts in with attested.allowSecretUse (DESIGN-042 5.1);
-//   - no policy approves break-glass, role dev-env-grant-breakglass or
+//   - no policy approves break-glass, pod-exec, role dev-env-grant-breakglass or
 //     dev-env-grant-secrets-read, or profile ops;
 //   - no standing policy approves maintenance: only an attested policy with an
 //     exact maintenance scope may (ADR-013);
@@ -40,12 +40,13 @@ import (
 
 // GrantType is what a grant gives (DESIGN-001 6.12). The LLM lease of 8.3
 // joins this list in plan 09.
-// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance
 type GrantType string
 
 const (
 	// GrantKube binds a catalog role to a ServiceAccount made for the grant.
 	GrantKube GrantType = "kube"
+	// GrantPodExec leases exec in one container of an existing pod.
+	GrantPodExec GrantType = "pod-exec"
 	// GrantMaintenance leases an isolated executor for one immutable task.
 	GrantMaintenance GrantType = "maintenance"
 	// GrantEgress opens destinations to the session's pod with a
@@ -165,15 +166,22 @@ const (
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'maintenance') == has(self.maintenance)",message="maintenance is set only for a maintenance task"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
+// +kubebuilder:validation:XValidation:rule="(self.type == 'pod-exec') == has(self.podExec)",message="podExec is set for type pod-exec, and only there"
+// +kubebuilder:validation:XValidation:rule="self.type != 'pod-exec' || (duration(self.ttl) <= duration('1h') && has(self.requester.sessionUID))",message="pod-exec requires the authenticated session UID and at most one hour"
 // +kubebuilder:validation:XValidation:rule="!has(self.kube) || ((self.type == 'breakglass') == (self.kube.role == 'dev-env-grant-breakglass'))",message="type breakglass and role dev-env-grant-breakglass go together (D-27)"
 // +kubebuilder:validation:XValidation:rule="duration(self.ttl) >= duration('10m') && duration(self.ttl) <= duration('8h')",message="ttl runs from 10m to 8h"
 // +kubebuilder:validation:XValidation:rule="!has(self.kube) || (!(has(self.kube.reserved) && self.kube.reserved) && !(has(self.kube.allNamespaces) && self.kube.allNamespaces) && (!has(self.kube.storageTargets) || size(self.kube.storageTargets) == 0)) || duration(self.ttl) <= duration('1h')",message="reserved namespace snapshots and exact storage targets have a maximum TTL of 1h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'credential' || duration(self.ttl) <= duration('4h')",message="a credential grant lasts at most 4h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'breakglass' || duration(self.ttl) <= duration('1h')",message="break-glass lasts at most 1h (D-27)"
-// +kubebuilder:validation:XValidation:rule="has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress) && has(self.credential) == has(oldSelf.credential) && has(self.maintenance) == has(oldSelf.maintenance)",message="immutable after create; only release may change"
+// +kubebuilder:validation:XValidation:rule="has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress) && has(self.credential) == has(oldSelf.credential) && has(self.maintenance) == has(oldSelf.maintenance) && has(self.podExec) == has(oldSelf.podExec)",message="immutable after create; only release may change"
 // +kubebuilder:validation:XValidation:rule="!(has(oldSelf.release) && oldSelf.release) || (has(self.release) && self.release)",message="release cannot be taken back"
 // +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || (duration(self.ttl) <= duration('1h') && has(self.requester.sessionUID) && self.maintenance.coordinator.name == self.requester.session && self.maintenance.coordinator.uid == self.requester.sessionUID)",message="maintenance requires the authenticated coordinator UID and at most one hour"
 type AccessGrantSpec struct {
+	// PodExec identifies the exact target resolved by the operator.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable pod exec target"
+	// +optional
+	PodExec *PodExecGrant `json:"podExec,omitempty"`
+
 	// Maintenance is an immutable task envelope.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable task scope"
 	// +optional
@@ -186,6 +194,7 @@ type AccessGrantSpec struct {
 	Requester GrantRequester `json:"requester"`
 
 	// Type is what the grant gives.
+	// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance;pod-exec
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only release may change"
 	// +required
 	Type GrantType `json:"type"`
@@ -225,6 +234,37 @@ type AccessGrantSpec struct {
 	// +optional
 	Release bool `json:"release,omitempty"`
 }
+
+// PodExecGrant names one container on a pod identified by UID.
+// +kubebuilder:validation:XValidation:rule="!(self.namespace in ['dev-env-system', 'dev-agents', 'dev-tools', 'dev-env-admin-issuance', 'kube-system', 'kyverno', 'flux-system', 'external-secrets', 'cert-manager', 'ceph-csi', 'openebs-system', 'volsync-system', 'k8tz', 'kube-public', 'kube-node-lease'])",message="pod-exec requires a namespace covered by Kyverno and outside the identity guard's exec denies"
+type PodExecGrant struct {
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	Pod string `json:"pod"`
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Container string `json:"container"`
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`
+	PodUID string `json:"podUID"`
+	// Security records what the operator saw on the same read that resolved
+	// PodUID. Older grants may have no recorded security details.
+	// +optional
+	Security *PodExecTargetSecurity `json:"security,omitempty"`
+}
+
+// PodExecTargetSecurity is the request-time security snapshot shown to approvers.
+type PodExecTargetSecurity struct {
+	Privileged             bool `json:"privileged"`
+	HostPID                bool `json:"hostPID"`
+	PowerfulServiceAccount bool `json:"powerfulServiceAccount"`
+}
+
+// PodExecGrantNamePrefix distinguishes these ServiceAccounts at admission.
+const PodExecGrantNamePrefix = "grant-pod-exec-"
 
 // GrantRequester is the session a grant is for, with what a GrantPolicy matches
 // on and what the audit record keeps (DESIGN-001 6.12).
@@ -545,6 +585,7 @@ type AdminCredentialStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: it names the grant's ServiceAccount and bindings"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^grant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="metadata.name is grant-<id>, a DNS label: it names the grant's ServiceAccount, and the audit log shows it"
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.startsWith('grant-pod-exec-') == (self.spec.type == 'pod-exec')",message="the grant-pod-exec name prefix is reserved for pod-exec grants"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.ask) || (has(self.status) && has(self.status.ask) && self.status.ask == oldSelf.status.ask)",message="the grant ask route is set once"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.askUnreadAt) || (has(self.status) && (!has(self.status.askUnreadAt) || self.status.askUnreadAt == oldSelf.status.askUnreadAt))",message="the grant ask unread time is set once per episode"
 type AccessGrant struct {
@@ -642,6 +683,7 @@ type GrantPolicySpec struct {
 	Delegated *DelegatedRequesters `json:"delegated,omitempty"`
 
 	// Type is the grant type it approves.
+	// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance
 	// +required
 	Type GrantType `json:"type"`
 

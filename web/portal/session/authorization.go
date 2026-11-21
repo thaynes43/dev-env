@@ -34,6 +34,10 @@ type CurrentAuthorizer struct {
 	client           *http.Client
 }
 
+// askUsernameKey carries an optional request-local destination for the Asks
+// route. Only a successful current authorization writes the claim.
+type askUsernameKey struct{}
+
 func NewCurrentAuthorizer(c CurrentAuthorizationConfig) (*CurrentAuthorizer, error) {
 	return newCurrentAuthorizer(c, nil)
 }
@@ -119,7 +123,8 @@ func (a *CurrentAuthorizer) Authorize(ctx context.Context, p portal.Principal, r
 	if err != nil || len(body) > 64*1024 {
 		return portal.ErrUnavailable
 	}
-	if !validUserInfo(body, p.Subject) {
+	username, allowed := parseUserInfo(body, p.Subject)
+	if !allowed {
 		return portal.ErrDenied
 	}
 	// Revocation/replacement/expiry during UserInfo must also discard this allow.
@@ -132,6 +137,9 @@ func (a *CurrentAuthorizer) Authorize(ctx context.Context, p portal.Principal, r
 	}
 	if !matchesReference(current, ref, a.now()) {
 		return portal.ErrDenied
+	}
+	if dest, ok := ctx.Value(askUsernameKey{}).(*string); ok {
+		*dest = username
 	}
 	return nil
 }
@@ -158,37 +166,39 @@ func canonicalWorkPackageID(id string) bool {
 	return err == nil && n > 0 && strconv.Itoa(n) == id
 }
 
-// Token-walk the top-level object to reject duplicate security claims. Other
-// normal profile fields are permitted but never retained, logged or returned.
-func validUserInfo(body []byte, subject string) bool {
+// Token-walk the top-level object to reject duplicate claims. The username
+// is optional for authorization and is used only when answering a grant Ask.
+func parseUserInfo(body []byte, subject string) (string, bool) {
 	d := json.NewDecoder(bytes.NewReader(body))
 	token, err := d.Token()
 	if err != nil || token != json.Delim('{') {
-		return false
+		return "", false
 	}
 	seen := map[string]bool{}
-	var sub string
+	var sub, username string
 	active, admin := false, false
 	for d.More() {
 		key, err := d.Token()
 		name, ok := key.(string)
 		if err != nil || !ok || seen[name] {
-			return false
+			return "", false
 		}
 		seen[name] = true
 		var raw json.RawMessage
 		if d.Decode(&raw) != nil {
-			return false
+			return "", false
 		}
 		switch name {
 		case "sub":
 			if json.Unmarshal(raw, &sub) != nil {
-				return false
+				return "", false
 			}
+		case "preferred_username":
+			username, _ = jsonString(raw)
 		case "portal_is_active", "portal_is_admin":
 			// JSON null unmarshals into bool without error: require true literal.
 			if !bytes.Equal(bytes.TrimSpace(raw), []byte("true")) {
-				return false
+				return "", false
 			}
 			if name == "portal_is_active" {
 				active = true
@@ -198,10 +208,13 @@ func validUserInfo(body []byte, subject string) bool {
 		}
 	}
 	if _, err := d.Token(); err != nil {
-		return false
+		return "", false
 	}
 	var extra any
-	return d.Decode(&extra) == io.EOF && seen["sub"] && active && admin && sub == subject
+	if d.Decode(&extra) != io.EOF || !seen["sub"] || !active || !admin || sub != subject {
+		return "", false
+	}
+	return username, true
 }
 
 // Batched final check permits one fresh UserInfo request after all local IDs

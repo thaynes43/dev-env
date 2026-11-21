@@ -150,7 +150,7 @@ func DelegateRefusedRole(role string) bool {
 
 func matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant, profiles, repos []string, agents []v1alpha1.AgentKind) bool {
 	ps, gs := &p.Spec, &g.Spec
-	if gs.Type == v1alpha1.GrantBreakglass || ps.Type == v1alpha1.GrantBreakglass || gs.Type != ps.Type {
+	if gs.Type == v1alpha1.GrantBreakglass || gs.Type == v1alpha1.GrantPodExec || gs.Type != ps.Type {
 		return false
 	}
 	r := gs.Requester

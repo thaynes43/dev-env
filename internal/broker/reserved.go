@@ -80,7 +80,7 @@ func reservedInput(g *v1alpha1.AccessGrant, d MaintenanceDecision, exclusions []
 
 // ValidateReservedRequestShape checks scope only, never actor or approval.
 func ValidateReservedRequestShape(g *v1alpha1.AccessGrant, classes, exclusions []string) error {
-	if g.Spec.Kube == nil || g.Spec.Egress != nil || g.Spec.Credential != nil || g.Spec.Maintenance != nil || len(g.Spec.Kube.Secrets) > 0 {
+	if g.Spec.Kube == nil || g.Spec.Egress != nil || g.Spec.Credential != nil || g.Spec.Maintenance != nil || g.Spec.PodExec != nil || len(g.Spec.Kube.Secrets) > 0 {
 		return fmt.Errorf("%w: reserved grant contains a different scope type", ErrRefused)
 	}
 	class := ReservedClass(g)
@@ -254,6 +254,9 @@ func (b *Broker) checkReservedOrLegacyCapabilities(g *v1alpha1.AccessGrant) erro
 // Cleanup derives names from the retained frozen snapshot even when flags or
 // current namespace inventory have changed. It never expands a binding scope.
 func bindingNamespaces(g *v1alpha1.AccessGrant) []string {
+	if target := g.Spec.PodExec; target != nil {
+		return []string{target.Namespace}
+	}
 	if g.Spec.Kube == nil {
 		return nil
 	}

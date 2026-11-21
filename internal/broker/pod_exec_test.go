@@ -1,0 +1,259 @@
+package broker
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/url"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantattest"
+)
+
+func podExecAskFixture(t *testing.T) (*grantAskFixture, *corev1.Pod) {
+	t.Helper()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "fixture",
+			Name:      strings.Repeat(strings.Repeat("p", 63)+".", 3) + strings.Repeat("p", 61),
+			UID:       "11111111-1111-1111-1111-111111111111",
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}},
+	}
+	f := newGrantAskFixture(t, true, pod)
+	if err := f.base.Delete(f.ctx, f.g); err != nil {
+		t.Fatal(err)
+	}
+	g := f.g.DeepCopy()
+	g.Name, g.ResourceVersion = "grant-pod-exec-fixture", ""
+	g.Spec.Type, g.Spec.Kube = v1alpha1.GrantPodExec, nil
+	g.Spec.PodExec = &v1alpha1.PodExecGrant{Namespace: pod.Namespace, Pod: pod.Name, Container: "app"}
+	if err := ResolvePodExecTarget(f.ctx, f.base, g.Spec.PodExec); err != nil {
+		t.Fatal(err)
+	}
+	g.Spec.TTL.Duration = 20 * time.Minute
+	if err := f.base.Create(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	f.g = g
+	return f, pod
+}
+
+func TestPodExecAskApprovalAndCleanup(t *testing.T) {
+	for _, end := range []string{"expiry", "release", "session ended", "pod replaced", "pod read forbidden"} {
+		t.Run(end, func(t *testing.T) {
+			f, pod := podExecAskFixture(t)
+			f.openAsk()
+			ask := f.onlyAsk().Spec.Grant
+			if ask.Type != "pod-exec" || ask.Target != pod.Name || ask.TTL != "20m0s" ||
+				ask.Detail != "Shell in app (fixture). Privileged: no, host PID: no, powerful ServiceAccount: no" || ask.ScopeDigest != grantattest.ScopeDigest(f.g) {
+				t.Fatalf("wrong scope on the Ask: %+v", ask)
+			}
+			f.answer(ptr.To(true), "approver", "")
+			f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.ServiceAccount == g.Name })
+			g := f.grant()
+			if g.Status.Phase != v1alpha1.GrantActive || g.Status.ApprovedBy != "authentik/approver" {
+				t.Fatalf("grant status %+v", g.Status)
+			}
+			role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: g.Name}}
+			binding := rb(pod.Namespace, g.Name)
+			acct := sa(g.Name)
+			for _, o := range []client.Object{role, binding, acct} {
+				if err := f.base.Get(f.ctx, client.ObjectKeyFromObject(o), o); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wantRules := []rbacv1.PolicyRule{
+				{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}, ResourceNames: []string{pod.Name}},
+				{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create"}, ResourceNames: []string{pod.Name}},
+			}
+			if !reflect.DeepEqual(role.Rules, wantRules) ||
+				binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: g.Name}) ||
+				!reflect.DeepEqual(binding.Subjects, []rbacv1.Subject{{Kind: "ServiceAccount", Namespace: sessionNS, Name: g.Name}}) {
+				t.Fatalf("unexpected role or binding: %+v %+v", role.Rules, binding)
+			}
+			wantPhase := v1alpha1.GrantReleased
+			switch end {
+			case "expiry":
+				f.clk.Step(20 * time.Minute)
+				wantPhase = v1alpha1.GrantExpired
+			case "release":
+				g.Spec.Release = true
+				if err := f.base.Update(f.ctx, g); err != nil {
+					t.Fatal(err)
+				}
+			case "session ended":
+				if err := f.base.Delete(f.ctx, f.session); err != nil {
+					t.Fatal(err)
+				}
+			case "pod replaced":
+				replacePodExecFixture(t, f, pod)
+				wantPhase = v1alpha1.GrantFailed
+			case "pod read forbidden":
+				f.b.APIReader = &podExecFaultClient{Client: f.meta, podReadError: apierrors.NewForbidden(
+					corev1.Resource("pods"), pod.Name, errors.New("synthetic access refusal"))}
+				wantPhase = v1alpha1.GrantFailed
+			}
+			f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == wantPhase })
+			for _, o := range []client.Object{role, binding, acct} {
+				if err := f.base.Get(f.ctx, client.ObjectKeyFromObject(o), o); !apierrors.IsNotFound(err) {
+					t.Fatalf("expected cleanup of %T, got %v", o, err)
+				}
+			}
+		})
+	}
+}
+
+func TestPodExecAskDetailFitsLongestNames(t *testing.T) {
+	f, _ := podExecAskFixture(t)
+	target := f.g.Spec.PodExec
+	target.Namespace, target.Container = strings.Repeat("n", 63), strings.Repeat("c", 63)
+	target.Security = &v1alpha1.PodExecTargetSecurity{Privileged: true, HostPID: true, PowerfulServiceAccount: true}
+	detail, fits := grantAskDetail(f.g)
+	if !fits || !strings.Contains(detail, target.Container+" ("+target.Namespace+")") ||
+		!strings.HasSuffix(detail, "Privileged: yes, host PID: yes, powerful ServiceAccount: yes") {
+		t.Fatalf("longest names must fit with all security facts: %q", detail)
+	}
+}
+
+func replacePodExecFixture(t *testing.T, f *grantAskFixture, pod *corev1.Pod) {
+	t.Helper()
+	if err := f.base.Delete(f.ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	replacement := pod.DeepCopy()
+	replacement.ResourceVersion = ""
+	replacement.UID = "33333333-3333-3333-3333-333333333333"
+	if err := f.base.Create(f.ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPodExecApprovalRefusals(t *testing.T) {
+	f, pod := podExecAskFixture(t)
+	if err := f.b.Decide(f.ctx, f.g.Name, Decision{Approve: true, By: "approver"}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("unrouted approval: %v", err)
+	}
+	p := &v1alpha1.GrantPolicy{Spec: v1alpha1.GrantPolicySpec{
+		Type: v1alpha1.GrantPodExec, Profiles: []string{f.g.Spec.Requester.Profile}, MaxTTL: f.g.Spec.TTL,
+	}}
+	if Matches(p, f.g) {
+		t.Fatal("pod-exec matched a standing policy")
+	}
+	p.Spec.Attested, p.Spec.Profiles = &v1alpha1.AttestedRequesters{Profiles: p.Spec.Profiles}, nil
+	if MatchesAttested(p, f.g) {
+		t.Fatal("pod-exec matched an attested policy")
+	}
+	f.openAsk()
+	replacePodExecFixture(t, f, pod)
+	f.answer(ptr.To(true), "approver", "")
+	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantDenied })
+	if err := f.base.Get(f.ctx, client.ObjectKeyFromObject(sa(f.g.Name)), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("replaced pod provisioned a ServiceAccount: %v", err)
+	}
+}
+
+type podExecFaultClient struct {
+	client.Client
+	podReadError error
+	bindingError error
+	deletedKinds []string
+}
+
+func (c *podExecFaultClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.Pod); ok && key.Namespace != sessionNS && c.podReadError != nil {
+		return c.podReadError
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func (c *podExecFaultClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	c.deletedKinds = append(c.deletedKinds, kindOf(obj))
+	if _, ok := obj.(*rbacv1.RoleBinding); ok && c.bindingError != nil {
+		return c.bindingError
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
+
+func TestPodExecAskTargetReadErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fault error
+		want  string
+	}{
+		{"forbidden", apierrors.NewForbidden(corev1.Resource("pods"), "fixture", errors.New("synthetic access refusal")), "is forbidden"},
+		{"bad request", apierrors.NewBadRequest("synthetic invalid read"), "synthetic invalid read"},
+		{"DNS name not found", &net.DNSError{Err: "no such host", IsNotFound: true}, "no such host"},
+		{"retryable service unavailable", apierrors.NewServiceUnavailable("synthetic outage"), ""},
+		{"retryable DNS failure", &url.Error{Op: "Get", Err: &net.DNSError{Err: "server misbehaving", IsTemporary: true}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := podExecAskFixture(t)
+			f.openAsk()
+			f.answer(ptr.To(true), "approver", "")
+			fault := &podExecFaultClient{Client: f.meta, podReadError: tc.fault}
+			f.b.APIReader = fault
+			res, err := f.reconcile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := f.grant()
+			if tc.want == "" {
+				if got.Status.Phase != v1alpha1.GrantPending || res.RequeueAfter != time.Second {
+					t.Fatalf("transient read did not stay pending and retry: %+v, %+v", got.Status, res)
+				}
+				fault.podReadError = nil
+				f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantActive })
+				return
+			}
+			if got.Status.Phase != v1alpha1.GrantDenied || got.Status.DeniedBy != DeniedByBroker ||
+				!strings.Contains(got.Status.Message, "read target pod") || !strings.Contains(got.Status.Message, tc.want) {
+				t.Fatalf("permanent read failure did not deny with its reason: %+v, %+v", got.Status, res)
+			}
+		})
+	}
+}
+
+func TestPodExecRevokeDeletesServiceAccountBeforeFailedRoleBinding(t *testing.T) {
+	f, pod := podExecAskFixture(t)
+	f.openAsk()
+	f.answer(ptr.To(true), "approver", "")
+	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.ServiceAccount == g.Name })
+	g := f.grant()
+	g.Spec.Release = true
+	if err := f.base.Update(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	fault := &podExecFaultClient{Client: f.meta, bindingError: errors.New("synthetic binding delete failure")}
+	f.b.Client = fault
+	if _, err := f.reconcile(); !errors.Is(err, fault.bindingError) {
+		t.Fatalf("revoke did not return the binding delete failure: %v", err)
+	}
+	if !reflect.DeepEqual(fault.deletedKinds, []string{"serviceaccount", "rolebinding", "role"}) {
+		t.Fatalf("unexpected revoke order: %v", fault.deletedKinds)
+	}
+	acct := sa(g.Name)
+	if err := f.base.Get(f.ctx, client.ObjectKeyFromObject(acct), acct); !apierrors.IsNotFound(err) {
+		t.Fatalf("ServiceAccount survived the failed binding delete: %v", err)
+	}
+	binding := rb(pod.Namespace, g.Name)
+	if err := f.base.Get(f.ctx, client.ObjectKeyFromObject(binding), binding); err != nil {
+		t.Fatalf("failing binding delete should leave the binding for retry: %v", err)
+	}
+	fault.bindingError = nil
+	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantReleased })
+	if err := f.base.Get(f.ctx, client.ObjectKeyFromObject(binding), binding); !apierrors.IsNotFound(err) {
+		t.Fatalf("binding survived the revoke retry: %v", err)
+	}
+}

@@ -203,6 +203,71 @@ func TestAsksAnswersInfoApprovalAndReplay(t *testing.T) {
 	}
 }
 
+func TestPodExecGrantAskCardAndAnswer(t *testing.T) {
+	for _, mode := range []string{"approve", "decline", "missing username", "invalid username", "username changed"} {
+		t.Run(mode, func(t *testing.T) {
+			f, c, o, form := asksFixture(t)
+			ask := &o.items[0]
+			ask.Type = apiv1.AskTypeGrant
+			ask.ExpiresAt = time.Time{}
+			ask.Options, ask.Recommended, ask.AllowFreeText = nil, "", false
+			ask.Question = "Inspect the running process"
+			ask.Grant = &apiv1.AskGrant{UID: "fixture-grant", ScopeDigest: strings.Repeat("a", 43),
+				Type: apiv1.GrantTypePodExec, Target: "target", TTL: "20m0s",
+				Detail: "Shell in app (fixture). Privileged: yes, host PID: no, powerful ServiceAccount: yes"}
+			userInfo := strings.TrimSuffix(currentAllow, "}") + `,"preferred_username":"fixture-approver"}`
+			switch mode {
+			case "missing username":
+				userInfo = currentAllow
+			case "invalid username":
+				userInfo = strings.Replace(userInfo, "fixture-approver", "policy/forged", 1)
+			}
+			c.Authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(userInfo), nil })
+			page := httptest.NewRecorder()
+			NewAssembly(c).ServeHTTP(page, f.request(http.MethodGet, AsksPath+"?ask="+ask.ID, ""))
+			if page.Code != http.StatusOK {
+				t.Fatalf("grant Ask returned %d", page.Code)
+			}
+			for _, want := range []string{
+				"Inspect the running process", "<dt>Pod</dt><dd>target</dd>", ask.Grant.Detail,
+				"<dt>Time to open new shells</dt><dd>20 minutes</dd>",
+				"The security details describe the pod when the request was made.",
+				"A shell opened before the deadline keeps running until it is closed.",
+				"the shell can open in the replacement pod.",
+			} {
+				if !strings.Contains(page.Body.String(), want) {
+					t.Errorf("grant card missing %q", want)
+				}
+			}
+			servable := mode != "missing username" && mode != "invalid username"
+			if strings.Contains(page.Body.String(), "Allow new shells for 20 minutes") != servable ||
+				strings.Contains(page.Body.String(), "Approve for 20 minutes") ||
+				strings.Contains(page.Body.String(), ">Decline</button>") != servable ||
+				strings.Contains(page.Body.String(), "fixture-approver") || strings.Contains(page.Body.String(), "Answer before") {
+				t.Fatal("wrong answer controls or identity shown")
+			}
+
+			form.Set("optionId", "")
+			form.Set("decision", "approve")
+			form.Set("confirm", "yes")
+			if mode == "decline" {
+				form.Set("decision", "deny")
+			}
+			if mode == "username changed" {
+				o.onRead = func() { userInfo = strings.Replace(userInfo, "fixture-approver", "other-approver", 1) }
+			}
+			if w := askPost(f, c, form); mode == "approve" || mode == "decline" {
+				if w.Code != http.StatusSeeOther || len(o.answers) != 1 || o.answers[0].Actor.Username != "fixture-approver" ||
+					o.answers[0].Approved == nil || *o.answers[0].Approved != (mode == "approve") {
+					t.Fatalf("wrong grant answer result, status %d, answers %d", w.Code, len(o.answers))
+				}
+			} else if w.Code != http.StatusForbidden || len(o.answers) != 0 {
+				t.Fatalf("invalid grant answer reached the operator, status %d, answers %d", w.Code, len(o.answers))
+			}
+		})
+	}
+}
+
 func TestAsksRefuseTamperedAndExpiredAnswers(t *testing.T) {
 	for _, mode := range []string{"csrf", "duplicate-csrf", "extra-actor", "missing-text", "bad-request-id", "unknown-ask", "unknown-option", "empty", "expired", "scope-expired", "confirm-missing", "confirm-false", "approval-decision", "info-confirm"} {
 		t.Run(mode, func(t *testing.T) {

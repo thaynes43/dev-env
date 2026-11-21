@@ -106,6 +106,34 @@ func TestGrantRequestWaitsForTheAnswer(t *testing.T) {
 	}
 }
 
+func TestPodExecGrantCLI(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			if r.Method != http.MethodPost {
+				t.Errorf("method %s", r.Method)
+			}
+			return http.StatusCreated, `{"name":"grant-pod-exec-abc","phase":"Pending","type":"pod-exec","namespaces":["fixture"],"pod":"target","container":"app","ttl":"20m"}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "request", "--type", "pod-exec", "--namespace", "fixture", "--pod", "target",
+		"--container", "app", "--ttl", "20m", "--reason", "inspect the process", "--no-wait")
+	var got apiv1.CreateGrantRequest
+	if err := json.Unmarshal(h.api.requests()[0].body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != apiv1.GrantTypePodExec || len(got.Namespaces) != 1 || got.Namespaces[0] != "fixture" ||
+		got.Pod != "target" || got.Container != "app" || got.TTL != "20m" {
+		t.Fatalf("request %+v", got)
+	}
+	contains(t, "stdout", h.stdout.String(), "namespace: fixture", "pod: target", "container: app")
+	h.mustRun(ExitUsage, "grant", "request", "--type", "pod-exec", "--namespace", "fixture", "--pod", "target", "--reason", "inspect")
+	h.mustRun(ExitUsage, "grant", "request", "--type", "kube", "--pod", "target", "--reason", "inspect")
+	if len(h.api.requests()) != 1 {
+		t.Fatal("an invalid request reached the API")
+	}
+}
+
 func TestGrantRequestReportsARefusal(t *testing.T) {
 	h := newHarness(t)
 	serveRaw(h, map[string]func(*http.Request) (int, string){

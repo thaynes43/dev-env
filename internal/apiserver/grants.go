@@ -62,6 +62,11 @@ func (s *Server) createGrant(ctx context.Context, w http.ResponseWriter, r *http
 			return 0, nil, forbidden("maintenance identity or target: %s", err)
 		}
 	}
+	if target := g.Spec.PodExec; target != nil {
+		if err := broker.ResolvePodExecTarget(ctx, s.Live, target); err != nil {
+			return 0, nil, forbidden("pod-exec target: %s", err)
+		}
+	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 
@@ -95,6 +100,9 @@ func (s *Server) createGrant(ctx context.Context, w http.ResponseWriter, r *http
 		name, err := grantName(now)
 		if err != nil {
 			return 0, nil, err
+		}
+		if g.Spec.Type == v1alpha1.GrantPodExec {
+			name = v1alpha1.PodExecGrantNamePrefix + strings.TrimPrefix(name, "grant-")
 		}
 		g.Name = name
 		err = s.Client.Create(ctx, g)
@@ -130,7 +138,7 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	var fields []apiv1.FieldError
 	add := func(field, format string, args ...any) { fields = append(fields, fieldError(field, format, args...)) }
 	notFor := func(kind string, set map[string]bool) {
-		for _, f := range []string{"reserved", "allNamespaces", "storageTargets", "role", "namespaces", "secrets", "fqdns", "cidrs", "endpoints", "ports", "credential", "maintenance"} {
+		for _, f := range []string{"reserved", "allNamespaces", "storageTargets", "role", "namespaces", "pod", "container", "secrets", "fqdns", "cidrs", "endpoints", "ports", "credential", "maintenance"} {
 			if set[f] {
 				add(f, "not for type %s", kind)
 			}
@@ -143,6 +151,8 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 		"storageTargets": len(req.StorageTargets) > 0,
 		"role":           req.Role != "",
 		"namespaces":     len(req.Namespaces) > 0,
+		"pod":            req.Pod != "",
+		"container":      req.Container != "",
 		"fqdns":          len(req.FQDNs) > 0,
 		"cidrs":          len(req.CIDRs) > 0,
 		"endpoints":      len(req.Endpoints) > 0,
@@ -197,6 +207,16 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 			spec.Kube.StorageTargets = append(spec.Kube.StorageTargets, v1alpha1.GrantStorageTarget{Kind: target.Kind, Name: target.Name, UID: target.UID})
 		}
 		notFor(req.Type, others("role", "namespaces", "reserved", "allNamespaces", "storageTargets", "secrets"))
+	case v1alpha1.GrantPodExec:
+		notFor(req.Type, others("namespaces", "pod", "container"))
+		if len(req.Namespaces) != 1 {
+			add("namespaces", "pod-exec requires exactly one namespace")
+		} else {
+			spec.PodExec = &v1alpha1.PodExecGrant{Namespace: req.Namespaces[0], Pod: req.Pod, Container: req.Container}
+			if err := broker.ValidatePodExecScope(spec.PodExec, s.Policy.SessionNamespace); err != nil {
+				add("podExec", "%s", err)
+			}
+		}
 	case v1alpha1.GrantBreakglass:
 		if req.Role != "" && req.Role != v1alpha1.RoleBreakglass {
 			add("role", "break-glass is always %s (D-27); leave role empty", v1alpha1.RoleBreakglass)
@@ -240,9 +260,9 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 		spec.Credential = &v1alpha1.CredentialGrant{Name: v1alpha1.CredentialName(req.Credential)}
 		notFor(req.Type, others("credential"))
 	case "":
-		add("type", "required: kube, egress, credential or breakglass")
+		add("type", "required: kube, pod-exec, egress, credential, breakglass or maintenance")
 	default:
-		add("type", "%q is not kube, egress, credential or breakglass", req.Type)
+		add("type", "%q is not kube, pod-exec, egress, credential, breakglass or maintenance", req.Type)
 	}
 	if req.TTL != "" {
 		d, err := time.ParseDuration(req.TTL)
@@ -253,6 +273,9 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 		}
 	}
 	spec.TTL = metav1.Duration{Duration: ttl}
+	if typ == v1alpha1.GrantPodExec && (ttl < broker.MinTTL || ttl > broker.MaxPodExecTTL || ttl%time.Second != 0) {
+		add("ttl", "pod-exec requires a TTL from 10m to 60m in whole seconds")
+	}
 	if typ == v1alpha1.GrantMaintenance && spec.Maintenance != nil {
 		if err := broker.ValidateMaintenance(&v1alpha1.AccessGrant{Spec: spec}); err != nil {
 			add("maintenance", "%s", err)
@@ -315,7 +338,7 @@ func grantRequestedBy(g *v1alpha1.AccessGrant, session string, uid types.UID) bo
 	if bound := g.Spec.Requester.SessionUID; bound != "" {
 		return bound == uid
 	}
-	return g.Spec.Type != v1alpha1.GrantCredential
+	return g.Spec.Type != v1alpha1.GrantCredential && g.Spec.Type != v1alpha1.GrantPodExec
 }
 
 // pending is a grant that waits for an answer: no phase yet or Pending, and not
@@ -340,15 +363,16 @@ func mergeable(g *v1alpha1.AccessGrant, now time.Time) bool {
 // two grants ask for the same thing when their keys are equal. TTL and reason
 // take no part.
 type grantScope struct {
-	Type       string   `json:"type"`
-	Role       string   `json:"role,omitempty"`
-	Namespaces []string `json:"namespaces,omitempty"`
-	Secrets    []string `json:"secrets,omitempty"`
-	FQDNs      []string `json:"fqdns,omitempty"`
-	CIDRs      []string `json:"cidrs,omitempty"`
-	Endpoints  []string `json:"endpoints,omitempty"`
-	Ports      []string `json:"ports,omitempty"`
-	Credential string   `json:"credential,omitempty"`
+	PodExec    *v1alpha1.PodExecGrant `json:"podExec,omitempty"`
+	Type       string                 `json:"type"`
+	Role       string                 `json:"role,omitempty"`
+	Namespaces []string               `json:"namespaces,omitempty"`
+	Secrets    []string               `json:"secrets,omitempty"`
+	FQDNs      []string               `json:"fqdns,omitempty"`
+	CIDRs      []string               `json:"cidrs,omitempty"`
+	Endpoints  []string               `json:"endpoints,omitempty"`
+	Ports      []string               `json:"ports,omitempty"`
+	Credential string                 `json:"credential,omitempty"`
 }
 
 // scopeKey is a grant's scope as a string that compares lists as sets.
@@ -359,7 +383,7 @@ func scopeKey(spec *v1alpha1.AccessGrantSpec) string {
 	if spec.Maintenance != nil {
 		return broker.MaintenanceDigest(&v1alpha1.AccessGrant{Spec: *spec})
 	}
-	k := grantScope{Type: string(spec.Type)}
+	k := grantScope{Type: string(spec.Type), PodExec: spec.PodExec}
 	if kg := spec.Kube; kg != nil {
 		k.Role, k.Namespaces, k.Secrets = kg.Role, sortedSet(kg.Namespaces), sortedSet(kg.Secrets)
 	}
@@ -611,6 +635,10 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 			v.StorageTargets = append(v.StorageTargets, apiv1.GrantStorageTarget{Kind: target.Kind, Name: target.Name, UID: target.UID})
 		}
 		v.Secrets = kg.Secrets
+	}
+	if target := g.Spec.PodExec; target != nil {
+		v.Namespaces = []string{target.Namespace}
+		v.Pod, v.Container, v.PodUID = target.Pod, target.Container, target.PodUID
 	}
 	if e := g.Spec.Egress; e != nil {
 		v.FQDNs, v.CIDRs = e.FQDNs, e.CIDRs
