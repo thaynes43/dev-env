@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.114.0](https://github.com/thaynes43/dev-env/compare/v2.113.0...v2.114.0) (2026-11-21)
+
+
+### Features
+
+* **keeper:** early recovery from a revoked Claude access token, off by default (DESIGN-069 slice 6, OP938) ([#1238](https://github.com/thaynes43/dev-env/issues/1238)) ([c2908cb](https://github.com/thaynes43/dev-env/commit/c2908cb4f9bbd42c28417f74bbd64486879a1979))
+
+
+### Bug Fixes
+
+* **keeper:** slice 6 enablement prep, coalesced diagnostic classes, closing probe kept, guard tests (DESIGN-069, OP939) ([#1241](https://github.com/thaynes43/dev-env/issues/1241)) ([5deb7fd](https://github.com/thaynes43/dev-env/commit/5deb7fd5dddd113321192c503761eaef73773015))
+
 ## [2.113.0](https://github.com/thaynes43/dev-env/compare/v2.112.0...v2.113.0) (2026-11-19)
 
 
