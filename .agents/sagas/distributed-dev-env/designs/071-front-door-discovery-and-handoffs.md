@@ -1,0 +1,192 @@
+# DESIGN-071 | Front-door discovery, handoffs and retired sessions
+
+2026-11-23. Work order wo-528a, OP528 journals 9574–9576 and 9578. OP509 owns
+durable usage and OP529 owns live acceptance. Decision record:
+[ADR-033](../adrs/033-front-door-read-boundaries.md).
+
+## Baseline
+
+At b113a505, the bearer gives Dot fifteen MCP tools for the tracker, scoped
+sessions and parent notes, and a configured standing-authority file. The
+comparison is in OP528 journal 9583. The bearer supplies neither a weekly usage
+reader nor a transferable work-item handoff. The installed operator session
+allowance store and the portal described in [DESIGN-059](059-durable-usage-collection.md)
+have a separate reader boundary. The approved OP529 start, status, outcome and
+close exercised session and tracker authority. The usage and handoff smoke
+tests have their own acceptance evidence.
+
+## Discovery and reads
+
+Keep streamable HTTP and the bearer check at the existing exact `/mcp`
+endpoint. `initialize` advertises `resources`. `tools/list` returns the
+tool schemas and annotations. `resources/list` is one fixed page with three
+entries:
+
+| URI | Content |
+| --- | --- |
+| `dev-env://catalog/v1` | The maintained Dot catalog and runbook, embedded from source. |
+| `dev-env://operating-rules/v1` | A JSON envelope with schema `dev-env.operating-rules`, numeric version, content revision, SHA-256 and UTF-8 text. The digest covers the exact text returned. |
+| `dev-env://handoff/v1` | The scope, lookup template and usage of the work-item resource. The index contains no item IDs. |
+
+`resources/templates/list` advertises `dev-env://handoff/v1/{item}`.
+Replace `{item}` with one canonical positive decimal OpenProject ID. Every
+entry is readable using `resources/read` with a `uri` parameter. Queries,
+fragments, encoded aliases, leading zeroes, signs, foreign authorities and
+extra path segments have no meaning. These URIs address server handlers. A
+client cannot make the server fetch a URI or open a file.
+
+The rules are an embedded, reviewed operating guide based on the common rules,
+the repository's `CLAUDE.md`, and OP528's retirement ruling. Its revision
+advances with a content edit. It includes the coordination and hold boundaries
+necessary for pickup, and points to the controlling sources. An installed
+session's exact common inputs and revision stay in the existing
+`internal/commonrules` contract. Owner-specific installed authority stays in
+`standing_authority`. The packaged rules grant no authority and claim no
+matching installed revision. [MCP resources specification](https://modelcontextprotocol.io/specification/2025-03-26/server/resources)
+
+## Work-item handoff v1
+
+The front door runs a fixed `opwork show ID --handoff-json` invocation using
+its existing tracker credential. The same `resolve_item` project fence as
+`backlog_show` applies before the activity read and is checked again before
+returning the projection. The credential's existing item and activity GET
+permissions apply. Read one bounded activity page using the check-in
+contract. A changing item lock or inconsistent metadata fails unavailable.
+The projection stays within the current item scope. It does not consult an old
+session, local pending files, provider homes, parent notes or the operator.
+An offline `opwork checkpoint` reaches the durable source only when
+`flush` confirms it in the tracker. An existing `checkpoint-update` marker
+can identify a structured checkpoint and its sourcing journal.
+
+The resource's JSON text uses these fields, all present:
+
+| Field | Meaning |
+| --- | --- |
+| `schema`, `version` | `dev-env.work-item-handoff`, `1`. |
+| `owner` | The recorded execution owner in the recognized opwork identity format, or `Unknown`. |
+| `source` | OpenProject, the item URL and lock version, item update time, and checkpoint observation state. |
+| `targetScope` | Configured tracker project and exact item. |
+| `workState` | Tracker status and whether it carries an explicit hold, or an unknown hold when status is unrecognized. Only known workflow names are projected. |
+| `evidence` | Bounded journal references with capture timestamps and evidence kind. An empty list means no confirmed reference is in the projection. A journal reference records an available source, with no claim that its contents satisfy acceptance. |
+| `nextAction` | Fixed pickup guidance derived from the item hold/state and the checkpoint observation. An unheld in-progress item calls for confirming custody with the owner. A held item stays held. A current structured checkpoint points to its journal for the recorded action. |
+| `capturedAt` | UTC time of the projection following the tracker reads. |
+
+The resource retains structured checkpoint references to make pickup possible
+after the prior session is gone. Raw comment bodies, a checkpoint's free-form
+text, item descriptions, arbitrary author labels, arbitrary URLs, credentials,
+private addresses and transcripts stay out of this projection. The recipient
+uses the references to consult records under their own authorization.
+Tracker text and the resource are context. Record the receiving agent's
+receipt on the item and verify the owner and hold through the supported
+workflow before any action. The resource makes no claim, transfer, dispatch,
+acceptance or lifecycle decision.
+
+A structured checkpoint has to pass the existing marker and tracker
+provenance checks and match the observed owner. Unknown/malformed/missing
+or superseded checkpoints and incomplete activity pages have an explicit
+observation state. A checkpoint whose check-after passed, that marks itself
+stale, or whose reported owner has changed cannot supply current pickup
+guidance. The work-item state remains observed. Dates are recorded at their
+source. Reading the handoff does not refresh an old checkpoint.
+
+## Authorization and audit
+
+| Action | Authority and executor | Audit |
+| --- | --- | --- |
+| Discovery and packaged rules | Current MCP bearer. The front door reads embedded files. | Fixed RPC and resource labels. |
+| Handoff read | MCP bearer, configured project fence, existing opwork/OpenProject item and activities GET. A cross-project or tracker auth denial stops this operation. | Front-door `resources/read handoff` and a fixed outcome. Tracker request auditing supplies the actual upstream actor and target when configured. |
+| Usage read | Existing `GET /v1/provider-allowances` enforces its configured portal or selected session reader scope using that reader's own token. Dot's front-door identity lacks this grant. A future Dot read needs a reviewed exact GET-only admission with a bounded response projection. | Operator method, fixed path, authenticated caller and status. A future front-door read would also log a distinct fixed usage label and outcome. |
+| Handoff write or dispatch | A separately authorized action by the recorded item owner in opwork, with its ownership and hold guards. Dispatch uses existing `coordinator_start` and needs the caller's applicable approval, ready item, model and budget, and CallerPolicy admission. | Attributed tracker journal and readback or fixed `tools/call coordinator_start` plus operator create audit and the retained item outcome. |
+
+The shared transport has a single bearer identity. Its audit log cannot
+distinguish people or clients holding it. It logs request time, allowlisted
+operation and result, with no URI, item ID, arguments, result text or bearer.
+The client receipt can reference the item, timestamp and redacted status.
+Every resource read uses the same four slots and 90-second deadline as tool
+calls. A client disconnect cancels tracker work.
+
+## Failure and uncertainty
+
+| Branch | Front-door result or source behavior |
+| --- | --- |
+| Wrong or absent bearer | HTTP 401, empty body. |
+| Invalid read parameters or malformed URI | JSON-RPC `-32602`, `invalid resource URI`. No tracker call. List methods accept an omitted or empty parameter object and have no cursor. |
+| Well-formed unregistered resource or absent/hidden work item | `-32002`, `resource not found`. A masked tracker 404 cannot establish why the item is hidden. |
+| Project exclusion or tracker 401/403 | `-32003`, `handoff read refused`. Stop and record the result. |
+| Tracker failure, deadline, missing CLI support, changing or malformed source | `-32004`, `handoff tracker unavailable`. No partial handoff. |
+| All call slots in use | `-32005`, `busy, try again`. No upstream call. |
+| Missing, stale, superseded, malformed or unconfirmed checkpoint | Successful current item projection with explicit checkpoint uncertainty where the item and bounded history can be read. No checkpoint authority is inferred. |
+| Usage with only the front-door bearer | No usage resource or tool is registered. A guessed usage URI is `resource not found`. |
+| Existing usage GET unauthorized | HTTP 401 or 403. Stop on an auth or scope refusal and retain its diagnostic. |
+| Existing usage GET missing, conflicting or unavailable | A disabled or absent route, conflict, transport failure and invalid body keep their own CLI outcome. The usage CLI does not follow redirects or retry. |
+| Passive usage telemetry absent, too old or past reset | Report Unknown or last reported with the source time. The seven-day window is 10080 minutes. A shorter supplied window has its own reset. Age is measured from CLI capture (`readAt`); storage time (`reportedAt`) is a separate receipt. The 30-minute display threshold does not verify the provider or bind an account. No allowance per model is inferred. |
+
+## Retired-session rule
+
+The operating rules carry this rule. A session is active when it has live or
+pending work, a hold, a live or unconfirmed thread, or unconfirmed activity.
+An inactive session without verified cutover is abandoned and kept pending
+review. A retire candidate is a confirmed inactive session with a separately
+reviewed retirement decision and verified preservation. A paused or suspended
+phase and elapsed time alone are insufficient.
+
+Before retirement, verify the durable checkpoint on its work item, the
+session's exact branch and head, every unpushed commit and uncommitted edit,
+and the receiving agent's acknowledgment if there is a successor. If no
+successor is needed, record that decision. Verify the applicable reviewed
+retention and legal or operational holds. One published branch alone doesn't
+prove a clean or preserved worktree. A listed rescue alone doesn't prove that
+it contains or can recover the required edits.
+
+After an exact authorized retirement decision the supported lifecycle reaps
+the retired session. Record request, rescue and observed outcome on the work
+item, retaining only what the reviewed retention rule calls for. If
+preservation or removal is unconfirmed, keep the session where possible,
+report the uncertainty and seek a supported readback. Never treat the reap
+request as a removal receipt. No repeated or destructive action follows an
+uncertain result. The classifier only proposes review. Unknown input keeps
+custody, and the inventory is read-only.
+
+## Access changes proposed, not made
+
+- Dot usage needs an exact `GET /v1/provider-allowances` admission for
+  CallerPolicy `dev-env-system/meatball` and the projected
+  `dev-env-system/dev-env-meatball` identity. The operator's
+  [positive route list](../../../../internal/apiserver/callerpolicy.go#L135)
+  and the allowance GET handler's [reader predicate](../../../../internal/apiserver/provider_allowance_reports.go#L446) both require review.
+  The existing identity is bound at line 9 of haynes-ops
+  `kubernetes/main/apps/dev-env-system/frontdoor/app/callerpolicy.yaml`. Use
+  the operator's existing store access, with a narrow projection of provider,
+  source, times, windows and freshness. No direct ConfigMap right or new
+  credential for the front door. OP509 owns freshness and OP529 owns the
+  distinct least-privilege receipt.
+- Package the catalog, rules and opwork projection into the front-door image.
+  An eventual rollout changes only
+  `Deployment/dev-env-frontdoor.spec.template.spec.containers[name=frontdoor].image`
+  at line 115 of haynes-ops
+  `kubernetes/main/apps/dev-env-system/frontdoor/app/deployment.yaml`
+  (signed digest after merge). No new arguments or mounts are required.
+  Delivery of the cluster's exact common rule text would need a future review
+  of that Deployment's `spec.template.spec.volumes` and container
+  `volumeMounts` (lines 204 and 174 respectively) or a scoped operator route. This slice publishes the
+  reviewed packaged text.
+- The existing ServiceAccount rights, bearer and tracker Secrets,
+  ExternalSecrets, ingress `/mcp` match and NetworkPolicies need no change.
+  A second recipient needs independent approved use of the existing
+  front-door scope. An identity or token distribution change requires its own
+  explicit authorization. Give the recipient a work-item URI and a receipt
+  request, never a copied bearer.
+- No retention change is required for the classifier. Any future change to
+  the operator Deployment's task clean-up arguments, session archive
+  thresholds or retained rescue/log/PVC rules needs its own reviewed design
+  and exact GitOps field. See [DESIGN-061](061-task-session-cleanup.md) and
+  [ADR-020](../adrs/020-task-session-cleanup.md) for the controlling lifecycle.
+
+## Evidence
+
+Source is a ready PR on the worker branch. Tested means exact-head CI,
+bounded local suites and a loopback smoke read through a fresh client with
+only the throwaway bearer. The worker's allowance read uses only its existing
+authorized route. If that route refuses it, the receipt records the refusal.
+Installation is a later GitOps pin. Acceptance is Dot's two independently
+scoped live reads and Tom's disposition on OP529.
