@@ -24,7 +24,8 @@ stand for a real in-scope target. Run a write only for approved work.
 - **Tracker** means the front-door `opwork` subprocess, the configured
   OpenProject credential, and the `haynes-engineering` project. Writes are
   attributed to `meatball`. The tracker must be reachable and authorize the
-  operation. Relevant owner, hold, lock and workflow guards apply.
+  operation. The project and lock guards apply to groom and order. The
+  caller verifies owner authorization and holds before either edit.
 - **Operator** means the front door presents the projected
   `dev-env-system/dev-env-meatball` identity, bound by CallerPolicy
   `dev-env-system/meatball`. The operator and route must be reachable and
@@ -37,11 +38,11 @@ stand for a real in-scope target. Run a write only for approved work.
 
 | Tool | Executor and action | Arguments and safe example | Scope and failure |
 | --- | --- | --- | --- |
-| `backlog_find` | Tracker read | Optional string `text`, string `status`, integer `epic`. Example `{"text":"front door","epic":42}`. | Bounded project search. Unknown status or backend error fails. Results are a page. |
+| `backlog_find` | Tracker read | Optional string `text`, string `status` (comma-separated names), integer `epic`. Example `{"text":"front door","epic":42}`. | Bounded project search. Unknown status or backend error fails. Results are a page. |
 | `backlog_show` | Tracker read | Integer `id`. Example `{"id":528}`. | Reads one item in the configured project. An out-of-project item is refused before showing text. |
 | `backlog_create` | Tracker write | Integer `epic`, nonblank strings `title` and `scope`, optional string `acceptance`. Example `{"epic":42,"title":"Example authorized story","scope":"Document the approved change","acceptance":"Record the verified result"}`. | Search first. Title is one line, at most 255 bytes. Scope and acceptance are at most 100,000 bytes each. Only a valid in-project parent. Same source key and matching text can confirm an earlier create. Conflicting text or likely duplicate refuses. |
-| `backlog_groom` | Tracker write | Integer `id`, object `fields` with at least one of string `description`, `acceptance`, `constraints`. Example `{"id":42,"fields":{"constraints":"Keep the approved scope"}}`. | Each supplied value is nonblank and at most 100,000 bytes. Scope, ownership, lock and hold refusals stop the update. An update with an unconfirmed readback keeps its attribution intent. |
-| `backlog_order` | Tracker write | Integer `id`, nonblank string `priority`. Example `{"id":42,"priority":"High"}`. | Exact known tracker priority name. Unknown priority, project, ownership, hold or lock failure stops. Read back an uncertain write. |
+| `backlog_groom` | Tracker write | Integer `id`, object `fields` with at least one of string `description`, `acceptance`, `constraints`. Example `{"id":42,"fields":{"constraints":"Keep the approved scope"}}`. | Each supplied value is nonblank and at most 100,000 bytes. Project, tracker authorization and lock refusals stop the update. An update with an unconfirmed readback keeps its attribution intent. |
+| `backlog_order` | Tracker write | Integer `id`, nonblank string `priority`. Example `{"id":42,"priority":"High"}`. | Uses a known tracker priority name, case-insensitively. An unknown priority, project or tracker authorization refusal, or lock conflict stops it. Read back an uncertain write. |
 | `backlog_close` | Tracker completion | Integer `id`, nonblank string `evidence` up to 100,000 bytes. Example `{"id":42,"evidence":"Approved PR and CI receipt for the reviewed head"}`. | Explicit holds prevail. Any coordinator takeover needs exact owner and item match, terminal success or failure, pod reclaimed and unchanged lock. Unconfirmed claim or completion returns its readback state. Observe tracker acceptance before reporting it. |
 | `coordinator_start` | Operator dispatch | Integer `item`, exactly one string `repo` or `project`, string `model`, integers `hours` and `workers` from 1–4, optional string `title`. Example `{"item":42,"project":"dev-env","model":"gpt-6-astra","hours":1,"workers":1}`. | Requires approved ready work, chosen model and bounded budget. The caller is limited to fresh tasks on profile `dev` and two unfinished sessions. Invalid input, policy bounds, ambiguous retained lookup or uncertain creation stop. Check status before acting on an uncertain create. |
 | `session_status` | Operator read | Exactly one nonempty string `name` or integer `item`. Example `{"item":528}`. | A caller-owned session can return a retained outcome with PR and head. An item lookup can be absent or ambiguous. Parent-note count can say `unavailable` or `incomplete` independently. |
