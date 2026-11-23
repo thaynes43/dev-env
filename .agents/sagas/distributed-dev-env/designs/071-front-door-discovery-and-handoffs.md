@@ -132,7 +132,7 @@ calls. A client disconnect cancels tracker work.
 | Branch | Front-door result or source behavior |
 | --- | --- |
 | Wrong or absent bearer | HTTP 401, empty body. |
-| Invalid read parameters or malformed URI | JSON-RPC `-32602`, `invalid resource URI`. No tracker call. List methods accept an omitted or empty parameter object and have no cursor. |
+| Invalid read parameters or malformed URI | JSON-RPC `-32602`, `invalid resource URI`. No tracker call. All three methods ignore `_meta` and refuse other extra keys. List methods have no cursor. |
 | Well-formed unregistered resource or absent/hidden work item | `-32002`, `resource not found`. A masked tracker 404 cannot establish why the item is hidden. |
 | Project exclusion or tracker 401/403 | `-32003`, `handoff read refused`. Stop and record the result. |
 | Tracker failure, deadline, missing CLI support, changing or malformed source | `-32004`, `handoff tracker unavailable`. No partial handoff. |

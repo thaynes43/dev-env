@@ -58,8 +58,7 @@ var resources = []resource{
 
 func listResources(method string, raw json.RawMessage) (any, *rpcError) {
 	if len(raw) > 0 {
-		var params map[string]json.RawMessage
-		if json.Unmarshal(raw, &params) != nil || params == nil || len(params) != 0 {
+		if params := resourceParams(raw); params == nil || len(params) != 0 {
 			return nil, &rpcError{invalidParams, "invalid resource list parameters"}
 		}
 	}
@@ -126,10 +125,19 @@ func (h *handler) readResource(ctx context.Context, raw json.RawMessage, bearer 
 	}
 }
 
+func resourceParams(raw json.RawMessage) map[string]json.RawMessage {
+	var params map[string]json.RawMessage
+	if json.Unmarshal(raw, &params) != nil {
+		return nil
+	}
+	delete(params, "_meta")
+	return params
+}
+
 func resourceTarget(raw json.RawMessage) (string, int64, *rpcError) {
 	invalid := &rpcError{invalidParams, "invalid resource URI"}
-	var params map[string]json.RawMessage
-	if json.Unmarshal(raw, &params) != nil || len(params) != 1 {
+	params := resourceParams(raw)
+	if len(params) != 1 {
 		return "", 0, invalid
 	}
 	var uri string

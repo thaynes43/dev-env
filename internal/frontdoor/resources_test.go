@@ -311,3 +311,31 @@ func TestHandoffProjectionValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestResourceParamsIgnoreMetaAndRejectEveryOtherExtraKey(t *testing.T) {
+	h := newResourceTestHandler(t, &bytes.Buffer{})
+	for _, test := range []struct {
+		method string
+		uri    string
+	}{
+		{"resources/list", ""},
+		{"resources/templates/list", ""},
+		{"resources/read", catalogURI},
+	} {
+		t.Run(test.method, func(t *testing.T) {
+			params := map[string]any{"_meta": map[string]any{"progressToken": 1}}
+			if test.uri != "" {
+				params["uri"] = test.uri
+			}
+			accepted := decodeResourceResponse(t, resourceRequest(t, h, testBearer, test.method, params))
+			if accepted.Error != nil || accepted.Result == nil {
+				t.Fatalf("params with _meta: %+v", accepted.Error)
+			}
+			params["cursor"] = "unused"
+			rejected := decodeResourceResponse(t, resourceRequest(t, h, testBearer, test.method, params))
+			if rejected.Error == nil || rejected.Error.Code != invalidParams || rejected.Result != nil {
+				t.Fatalf("params with an extra key: %+v", rejected.Error)
+			}
+		})
+	}
+}

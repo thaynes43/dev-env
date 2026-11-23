@@ -73,9 +73,10 @@ A disappeared record leaves a repeat eligible for a new start.
 
 ## Resources
 
-Each `resources/read` accepts only a string `uri`. The list methods have a
-single page and accept omitted parameters or `{}`. Each example below is
-the URI value for the request.
+Each `resources/read` requires a string `uri`. The list methods have a single
+page and accept omitted parameters or `{}`. All three methods ignore
+`_meta` and refuse any other extra key. Each example below is the URI value
+for the request.
 
 | URI | Executor and action | Example and boundary |
 | --- | --- | --- |
@@ -98,7 +99,7 @@ and an independently authorized dispatch each carry their own scope.
 | --- | --- |
 | Missing or wrong bearer | HTTP 401 and zero body bytes. |
 | Malformed URI, including alias, extra segment, query on the template or a leading zero | JSON-RPC `-32602 invalid resource URI`. |
-| Nonempty list parameters or supplied cursor | `-32602 invalid resource list parameters`. |
+| List parameters with a key other than `_meta`, including a cursor | `-32602 invalid resource list parameters`. |
 | Unknown resource or absent or hidden item | `-32002 resource not found`. |
 | Tracker authorization error or item outside the configured project | `-32003 handoff read refused`. Stop without another identity or route. |
 | Tracker failure, timeout, inconsistent read or invalid projection | `-32004 handoff tracker unavailable`. |
