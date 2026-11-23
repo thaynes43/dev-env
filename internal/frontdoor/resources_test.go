@@ -84,6 +84,18 @@ func newResourceTestHandler(t *testing.T, logs *bytes.Buffer) *handler {
 	return &handler{bearerFile: token, log: log.New(logs, "", 0), slots: make(chan struct{}, toolSlots)}
 }
 
+func TestOperatingRulesRevisionDigest(t *testing.T) {
+	// Add a new revision and digest when the packaged rules change.
+	golden := map[string]string{
+		"2026-11-23.1": "df1ac09ddb2ac8e4cddf5b5bc196ce081c71bc05e8d6e880e62561e737fd0d23",
+		"2026-11-23.2": "d551682e56daaab3874d7136a3a124cf8a9bb8a774b49bcc2256bd649e03293e",
+	}
+	got := commonrules.Digest([]byte(rulesText))
+	if want := golden[rulesRevision]; got != want {
+		t.Fatalf("operating rules revision %s has digest %s, want %q", rulesRevision, got, want)
+	}
+}
+
 func TestCatalogMatchesMCPDiscovery(t *testing.T) {
 	h := newResourceTestHandler(t, &bytes.Buffer{})
 	initialized := resourceResult[struct {

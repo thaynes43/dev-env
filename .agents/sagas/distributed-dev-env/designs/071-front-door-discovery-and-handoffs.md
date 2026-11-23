@@ -44,6 +44,15 @@ session's exact common inputs and revision stay in the existing
 `standing_authority`. The packaged rules grant no authority and claim no
 matching installed revision. [MCP resources specification](https://modelcontextprotocol.io/specification/2025-03-26/server/resources)
 
+### Rules maintenance proposal for Tom
+
+Add this line to the repository's `CLAUDE.md` under the rule about updating
+docs in the same PR as behavior changes.
+
+> When pickup, custody, hold or retirement rules change in `CLAUDE.md` or the
+> common rules, whoever changes the source rule also updates
+> `internal/frontdoor/operating-rules.md` and its revision in the same PR.
+
 ### Initialize instructions
 
 `initialize` returns this 68-word text.
