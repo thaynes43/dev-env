@@ -11,6 +11,7 @@ A missing or wrong bearer gets HTTP 401 and an empty body. Invalid JSON-RPC,
 unknown methods and malformed tool calls return protocol errors. A tool
 execution error returns `isError: true` with text. Tools and resource reads
 share four concurrent slots and one 90-second deadline per admitted call.
+`resources/list` and `resources/templates/list` take no call slot.
 A full queue returns `busy, try again`. The server and the operator enforce
 the caller’s limits. Call a tool and report the result. A refusal is final.
 Record it and do not work around it. When a mutation's outcome is uncertain, read its state using
@@ -92,7 +93,10 @@ stale, malformed, blocked, carries a different owner label or comes from
 incomplete history. The checkpoint check establishes label consistency
 with the recorded owner. Authorship is unverified. When the state is
 `present`, confirm custody with the recorded owner before acting. A caller
-with tracker authorization can consult the referenced journal. The installed owner text, tracker record,
+with tracker authorization can consult the referenced journal. A receiver
+with only the bearer learns the owner, state, any hold and whether a
+checkpoint exists. It cannot read the referenced journal or the recorded
+next step. The installed owner text, tracker record,
 and an independently authorized dispatch each carry their own scope.
 
 | Failure | Expected result |
