@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thaynes43/dev-env/internal/commonrules"
 	kjson "sigs.k8s.io/json"
+
+	"github.com/thaynes43/dev-env/internal/commonrules"
 )
 
 const (
