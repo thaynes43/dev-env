@@ -133,7 +133,11 @@ func TestReadResources(t *testing.T) {
 [ "$1" = "--project=haynes-engineering" ] && [ "$2" = "show" ] && [ "$4" = "--handoff-json" ] && [ "$#" -eq 4 ] || exit 77
 [ -z "${KUBERNETES_SERVICE_HOST-}${KUBECONFIG-}" ] || exit 77
 case "$3" in
-    528) printf '%%s\n' '%s' ;;
+    528) echo "private-diagnostic" >&2
+         cat <<'HANDOFF'
+%s
+HANDOFF
+         ;;
     529) echo "private-diagnostic"; exit 4 ;;
     530) echo "private-diagnostic"; exit 3 ;;
     531) echo "private-diagnostic"; exit 5 ;;
@@ -180,9 +184,12 @@ esac
 	if index := resourceContent(t, h, handoffURI, markdownMIME); !strings.Contains(index, handoffTemplate) {
 		t.Fatal("handoff index does not identify the template")
 	}
-	if handoff := resourceContent(t, h, handoffPrefix+"528", jsonMIME); handoff != handoffFixture {
-		t.Fatal("handoff round trip did not preserve the versioned document")
-	}
+	t.Run("successful opwork uses stdout despite stderr", func(t *testing.T) {
+		handoff := resourceContent(t, h, handoffPrefix+"528", jsonMIME)
+		if strings.TrimSpace(handoff) != handoffFixture {
+			t.Fatal("handoff did not use the versioned document on stdout")
+		}
+	})
 
 	for _, test := range []struct {
 		uri     string

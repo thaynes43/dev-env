@@ -168,7 +168,7 @@ func resourceText(uri, mimeType, text string) map[string]any {
 // readHandoff uses opwork's scoped, metadata-only JSON mode. Its fixed exit
 // codes distinguish project/auth refusal, absence, and source failure.
 func (h *handler) readHandoff(ctx context.Context, uri string, item int64, bearer string) (any, *rpcError) {
-	text, err := h.work.call(ctx, "show", strconv.FormatInt(item, 10), "--handoff-json")
+	text, err := h.work.callStdout(ctx, "show", strconv.FormatInt(item, 10), "--handoff-json")
 	unavailable := &rpcError{resourceDown, "handoff tracker unavailable"}
 	if err != nil {
 		var failure *opworkFailure
