@@ -36,7 +36,7 @@ RUN mkdir -p /out/licenses/go-stdlib \
  && mkdir -p /out/licenses/go-modules \
  && cp "$(go env GOROOT)/LICENSE" /out/licenses/go-stdlib/LICENSE
 
-FROM gcr.io/distroless/static:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
+FROM gcr.io/distroless/static:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
 COPY --from=build /src/bin/dev-env-operator /src/bin/dev-env-keeper /src/bin/agent-run /usr/local/bin/
 # This repo's license, the third-party list and the module license texts (#55). The
 # distroless base keeps its Debian packages' copyright files in /usr/share/doc.
