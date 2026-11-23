@@ -650,10 +650,10 @@ def handoff_checkpoint(acts, complete, owner, now):
     ref = {"kind": "structured-checkpoint", "activityId": source["activity_id"], "createdAt": created.isoformat()}
     if owner == "Unknown" or author != owner:
         return "owner-unconfirmed", ref
-    if meta.get("stale") is True or utc_time(meta["check_after"]) <= now:
-        return "stale", ref
     if meta.get("blocked") is True or meta.get("ack") is False:
         return "blocked", ref
+    if meta.get("stale") is True or utc_time(meta["check_after"]) <= now:
+        return "stale", ref
     return "present", ref
 
 
@@ -665,7 +665,7 @@ def handoff_next_action(status, owner, checkpoint):
     if status in {"Unknown", "Blocked"} or checkpoint == "blocked":
         return "Keep the work paused until its current state and next action are verified."
     if checkpoint == "present":
-        return "Confirm custody and consult the referenced checkpoint for the recorded next action."
+        return "A checkpoint carries the recorded owner's label. Its author is unverified. Confirm custody with the recorded owner before acting."
     if owner == "Unknown":
         return "Confirm an accountable owner and a durable checkpoint before pickup."
     return "Confirm custody and the next action with the recorded owner before pickup."
@@ -687,13 +687,14 @@ def show_handoff(t, a):
         state = state if state in HANDOFF_STATES else "Unknown"
         checkpoint, ref = handoff_checkpoint(acts, complete, owner, now)
         evidence = [ref] if ref else []
-        visible = [(created, act["id"]) for act in acts
-                   if type(act.get("id")) is int and act["id"] > 0
-                   and (created := utc_time(act.get("createdAt"))) is not None and created <= now]
-        if visible:
-            created, journal = max(visible)
-            if not ref or ref["activityId"] != journal:
-                evidence.append({"kind": "visible-journal", "activityId": journal, "createdAt": created.isoformat()})
+        if complete:
+            visible = [(created, act["id"]) for act in acts
+                       if type(act.get("id")) is int and act["id"] > 0
+                       and (created := utc_time(act.get("createdAt"))) is not None and created <= now]
+            if visible:
+                created, journal = max(visible)
+                if not ref or ref["activityId"] != journal:
+                    evidence.append({"kind": "visible-journal", "activityId": journal, "createdAt": created.isoformat()})
         return json.dumps({
             "schema": "dev-env.work-item-handoff", "version": 1, "owner": owner,
             "source": {"system": "OpenProject", "url": wp_url(a.id), "lockVersion": lock,

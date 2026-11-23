@@ -84,6 +84,19 @@ func newResourceTestHandler(t *testing.T, logs *bytes.Buffer) *handler {
 	return &handler{bearerFile: token, log: log.New(logs, "", 0), slots: make(chan struct{}, toolSlots)}
 }
 
+func TestOperatingRulesRevisionDigest(t *testing.T) {
+	// Add a new revision and digest when the packaged rules change.
+	golden := map[string]string{
+		"2026-11-23.1": "df1ac09ddb2ac8e4cddf5b5bc196ce081c71bc05e8d6e880e62561e737fd0d23",
+		"2026-11-23.2": "d551682e56daaab3874d7136a3a124cf8a9bb8a774b49bcc2256bd649e03293e",
+		"2026-11-23.3": "4a1495859a0c251c99eab16f95b59e9552b3bbfc133526c17b384719bf11f504",
+	}
+	got := commonrules.Digest([]byte(rulesText))
+	if want := golden[rulesRevision]; got != want {
+		t.Fatalf("operating rules revision %s has digest %s, want %q", rulesRevision, got, want)
+	}
+}
+
 func TestCatalogMatchesMCPDiscovery(t *testing.T) {
 	h := newResourceTestHandler(t, &bytes.Buffer{})
 	initialized := resourceResult[struct {
@@ -92,21 +105,31 @@ func TestCatalogMatchesMCPDiscovery(t *testing.T) {
 	if string(initialized.Capabilities["resources"]) != "{}" {
 		t.Fatalf("missing read-only resources capability: %v", initialized.Capabilities)
 	}
+	type schema struct {
+		Properties map[string]schema
+		Required   []string
+	}
 	tools := resourceResult[struct {
-		Tools []struct{ Name string }
+		Tools []struct {
+			Name        string
+			InputSchema schema
+			Annotations struct{ ReadOnlyHint *bool }
+		}
 	}](t, resourceRequest(t, h, testBearer, "tools/list", nil))
 	listed := resourceResult[struct{ Resources []resource }](t, resourceRequest(t, h, testBearer, "resources/list", nil))
 	templates := resourceResult[struct {
 		ResourceTemplates []struct{ URITemplate string }
 	}](t, resourceRequest(t, h, testBearer, "resources/templates/list", nil))
 	catalog := resourceContent(t, h, catalogURI, markdownMIME)
-	rows := regexp.MustCompile("(?m)^\\| `([^`]+)` \\|").FindAllStringSubmatch(catalog, -1)
+	rows := regexp.MustCompile("(?m)^\\| `([^`]+)` \\| ([^|\n]+) \\| ([^|\n]+) \\|").FindAllStringSubmatch(catalog, -1)
+	toolRows := make(map[string][]string)
 	var names, uris, wantedNames, wantedURIs []string
 	for _, row := range rows {
 		if strings.HasPrefix(row[1], "dev-env://") {
 			uris = append(uris, row[1])
 		} else {
 			names = append(names, row[1])
+			toolRows[row[1]] = row
 		}
 	}
 	for _, tool := range tools.Tools {
@@ -121,19 +144,52 @@ func TestCatalogMatchesMCPDiscovery(t *testing.T) {
 	if !slices.Equal(names, wantedNames) || !slices.Equal(uris, wantedURIs) {
 		t.Fatalf("catalog drift: tools %v vs %v, URIs %v vs %v", names, wantedNames, uris, wantedURIs)
 	}
+	var checkArguments func(tool, args string, input schema)
+	checkArguments = func(tool, args string, input schema) {
+		for name, property := range input.Properties {
+			if !strings.Contains(args, "`"+name+"`") {
+				t.Errorf("catalog %s row omits property %q", tool, name)
+			}
+			checkArguments(tool, args, property)
+		}
+		for _, required := range input.Required {
+			if !strings.Contains(args, "`"+required+"`") {
+				t.Errorf("catalog %s row omits required parameter %q", tool, required)
+			}
+		}
+	}
+	for _, tool := range tools.Tools {
+		row := toolRows[tool.Name]
+		checkArguments(tool.Name, row[3], tool.InputSchema)
+		if tool.Annotations.ReadOnlyHint == nil {
+			t.Errorf("%s has no readOnlyHint", tool.Name)
+			continue
+		}
+		want := "write"
+		if *tool.Annotations.ReadOnlyHint {
+			want = "read"
+		}
+		if !strings.HasSuffix(row[2], " "+want) {
+			t.Errorf("catalog %s action %q must end in %q", tool.Name, row[2], want)
+		}
+	}
 }
 
-const handoffFixture = `{"schema":"dev-env.work-item-handoff","version":1,"owner":"agent | worktree worker | branch agent/worker","source":{"system":"OpenProject","url":"https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528","lockVersion":7,"updatedAt":"2026-11-23T12:00:00Z","checkpoint":"present"},"targetScope":{"project":"haynes-engineering","item":528},"workState":{"status":"In progress","hold":false},"evidence":[{"kind":"structured-checkpoint","activityId":1,"createdAt":"2026-11-23T12:00:00Z"}],"nextAction":"Confirm custody and consult the referenced checkpoint for the recorded next action.","capturedAt":"2026-11-23T13:00:00Z"}`
+const handoffFixture = `{"schema":"dev-env.work-item-handoff","version":1,"owner":"agent | worktree worker | branch agent/worker","source":{"system":"OpenProject","url":"https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528","lockVersion":7,"updatedAt":"2026-11-23T12:00:00Z","checkpoint":"present"},"targetScope":{"project":"haynes-engineering","item":528},"workState":{"status":"In progress","hold":false},"evidence":[{"kind":"structured-checkpoint","activityId":1,"createdAt":"2026-11-23T12:00:00Z"}],"nextAction":"A checkpoint carries the recorded owner's label. Its author is unverified. Confirm custody with the recorded owner before acting.","capturedAt":"2026-11-23T13:00:00Z"}`
 
 func TestReadResources(t *testing.T) {
 	var logs bytes.Buffer
-	h := newResourceTestHandler(t, &logs)
-	stub := filepath.Join(t.TempDir(), "opwork")
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "opwork")
 	writeFile(t, stub, fmt.Sprintf(`#!/bin/sh
 [ "$1" = "--project=haynes-engineering" ] && [ "$2" = "show" ] && [ "$4" = "--handoff-json" ] && [ "$#" -eq 4 ] || exit 77
 [ -z "${KUBERNETES_SERVICE_HOST-}${KUBECONFIG-}" ] || exit 77
 case "$3" in
-    528) printf '%%s\n' '%s' ;;
+    528) echo "private-diagnostic" >&2
+         cat <<'HANDOFF'
+%s
+HANDOFF
+         ;;
     529) echo "private-diagnostic"; exit 4 ;;
     530) echo "private-diagnostic"; exit 3 ;;
     531) echo "private-diagnostic"; exit 5 ;;
@@ -144,7 +200,20 @@ esac
 	if err := os.Chmod(stub, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	h.work = opwork{path: stub, project: defaultProject}
+	bearer := filepath.Join(dir, "bearer")
+	tracker := filepath.Join(dir, "tracker")
+	operator := filepath.Join(dir, "operator")
+	writeFile(t, bearer, testBearer)
+	writeFile(t, tracker, testTracker)
+	writeFile(t, operator, "fixture-operator-token")
+	h, op, err := newHandler(Config{
+		BearerFile: bearer, TrackerFile: tracker, OperatorTokenFile: operator,
+		APIURL: "https://127.0.0.1:1", Opwork: stub,
+	}, log.New(&logs, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(op.Close)
 
 	t.Setenv("KUBERNETES_SERVICE_HOST", "should-not-reach-child")
 	t.Setenv("KUBECONFIG", "should-not-reach-child")
@@ -164,12 +233,19 @@ esac
 		rules.SHA256 != commonrules.Digest([]byte(rules.Text)) || !strings.Contains(rules.Text, "uncommitted edit") {
 		t.Fatal("invalid operating rules")
 	}
-	if index := resourceContent(t, h, handoffURI, markdownMIME); !strings.Contains(index, handoffTemplate) {
+	index := resourceContent(t, h, handoffURI, markdownMIME)
+	if !strings.Contains(index, handoffTemplate) {
 		t.Fatal("handoff index does not identify the template")
 	}
-	if handoff := resourceContent(t, h, handoffPrefix+"528", jsonMIME); handoff != handoffFixture {
-		t.Fatal("handoff round trip did not preserve the versioned document")
+	if strings.Contains(index, "action-specific") {
+		t.Fatal("handoff index contains action-specific authority guidance")
 	}
+	t.Run("successful opwork uses stdout despite stderr", func(t *testing.T) {
+		handoff := resourceContent(t, h, handoffPrefix+"528", jsonMIME)
+		if handoff != handoffFixture {
+			t.Fatal("handoff did not marshal the validated document from stdout")
+		}
+	})
 
 	for _, test := range []struct {
 		uri     string
@@ -209,32 +285,129 @@ esac
 	}
 }
 
-func TestResourceReadsWithEmptyOperatorToken(t *testing.T) {
-	dir := t.TempDir()
-	bearer := filepath.Join(dir, "bearer")
-	tracker := filepath.Join(dir, "tracker")
-	operator := filepath.Join(dir, "operator")
-	writeFile(t, bearer, testBearer)
-	writeFile(t, tracker, testTracker)
-	writeFile(t, operator, "")
-	h, op, err := newHandler(Config{
-		BearerFile: bearer, TrackerFile: tracker, OperatorTokenFile: operator,
-		APIURL: "https://127.0.0.1:1",
-	}, log.New(&bytes.Buffer{}, "", 0))
+func TestSharedHandoffContract(t *testing.T) {
+	// test_opwork_handoff.py checks the Python projection against this same fixture.
+	data, err := os.ReadFile("testdata/handoff-contract.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(op.Close)
-	if resourceContent(t, h, rulesURI, jsonMIME) == "" {
-		t.Fatal("rules resource unavailable")
+	var fixture struct {
+		TrackerBaseURL   string
+		Statuses         []string
+		CheckpointStates []string
+		NextActions      []string
 	}
-	status := resourceResult[struct {
-		IsError bool
-		Content []struct{ Text string }
-	}](t, resourceRequest(t, h, testBearer, "tools/call", map[string]any{
-		"name": "session_status", "arguments": map[string]string{"name": "example-session"},
-	}))
-	if !status.IsError || len(status.Content) != 1 || !strings.Contains(status.Content[0].Text, "is empty") {
-		t.Fatal("missing operator token did not fail the operator request locally")
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if handoffTrackerBaseURL != fixture.TrackerBaseURL {
+		t.Errorf("tracker base URL = %q, want %q", handoffTrackerBaseURL, fixture.TrackerBaseURL)
+	}
+	for _, set := range []struct {
+		name      string
+		got, want []string
+	}{
+		{"status", handoffStatuses, fixture.Statuses},
+		{"checkpoint state", handoffCheckpointStates, fixture.CheckpointStates},
+		{"next action", handoffNextActions, fixture.NextActions},
+	} {
+		if !slices.Equal(slices.Sorted(slices.Values(set.got)), slices.Sorted(slices.Values(set.want))) {
+			t.Errorf("%s values = %q, want %q", set.name, set.got, set.want)
+		}
+	}
+}
+
+func TestHandoffProjectionValidation(t *testing.T) {
+	const url = "https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528"
+	for _, test := range []struct {
+		name, from, to string
+	}{
+		{"owner must have the recognized format", "agent | worktree worker | branch agent/worker", "upstream prose"},
+		{"owner branch must match worktree", "branch agent/worker", "branch agent/other"},
+		{"owner must fit the slug bound", "worktree worker | branch agent/worker", "worktree " + strings.Repeat("w", 81) + " | branch agent/" + strings.Repeat("w", 81)},
+		{"checkpoint enum", `"checkpoint":"present"`, `"checkpoint":"other"`},
+		{"status enum", `"status":"In progress"`, `"status":"other"`},
+		{"hold must be boolean or null", `"hold":false`, `"hold":"false"`},
+		{"unheld status with true hold", `"hold":false`, `"hold":true`},
+		{"known status with null hold", `"hold":false`, `"hold":null`},
+		{"unknown status with false hold", `"status":"In progress"`, `"status":"Unknown"`},
+		{"held status with false hold", `"status":"In progress"`, `"status":"Needs approval"`},
+		{"next action allowlist", "Confirm custody with the recorded owner before acting.", "Use upstream prose."},
+		{"evidence kind enum", "structured-checkpoint", "other"},
+		{"duplicate top-level key", `"version":1`, `"version":2,"version":1`},
+		{"duplicate nested key", `"checkpoint":"present"`, `"checkpoint":"other","checkpoint":"present"`},
+		{"case-sensitive keys", `"checkpoint":`, `"Checkpoint":`},
+		{"exact work item URL", url, url + "?other"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text := strings.Replace(handoffFixture, test.from, test.to, 1)
+			if text == handoffFixture {
+				t.Fatal("mutation did not apply")
+			}
+			if validatedHandoff(text, defaultProject, 528, url, testBearer) != nil {
+				t.Fatal("invalid tracker projection accepted")
+			}
+		})
+	}
+}
+
+func TestHandoffEvidenceCombinations(t *testing.T) {
+	const url = "https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528"
+	const evidence = `{"kind":"structured-checkpoint","activityId":1,"createdAt":"2026-11-23T12:00:00Z"}`
+	const journal = `{"kind":"visible-journal","activityId":2,"createdAt":"2026-11-23T12:00:00Z"}`
+	for _, test := range []struct {
+		name, checkpoint string
+		refs             []string
+		valid            bool
+	}{
+		{"one of each kind", "present", []string{evidence, journal}, true},
+		{"visible journal alone", "absent", []string{journal}, true},
+		{"absent checkpoint without evidence", "absent", nil, true},
+		{"at most two evidence entries", "present", []string{evidence, journal, journal}, false},
+		{"duplicate checkpoint evidence", "present", []string{evidence, strings.Replace(evidence, `"activityId":1`, `"activityId":3`, 1)}, false},
+		{"duplicate visible journal evidence", "absent", []string{journal, strings.Replace(journal, `"activityId":2`, `"activityId":3`, 1)}, false},
+		{"absent checkpoint with reference", "absent", []string{evidence}, false},
+		{"incomplete checkpoint with reference", "incomplete", []string{evidence}, false},
+		{"malformed checkpoint with reference", "malformed", []string{evidence}, false},
+		{"present checkpoint without reference", "present", []string{journal}, false},
+		{"stale checkpoint without reference", "stale", nil, false},
+		{"blocked checkpoint without reference", "blocked", nil, false},
+		{"owner-unconfirmed checkpoint without reference", "owner-unconfirmed", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text := strings.Replace(handoffFixture, `"checkpoint":"present"`, `"checkpoint":"`+test.checkpoint+`"`, 1)
+			text = strings.Replace(text, evidence, strings.Join(test.refs, ","), 1)
+			if valid := validatedHandoff(text, defaultProject, 528, url, testBearer) != nil; valid != test.valid {
+				t.Fatalf("valid = %t, want %t", valid, test.valid)
+			}
+		})
+	}
+}
+
+func TestResourceParamsIgnoreMetaAndRejectEveryOtherExtraKey(t *testing.T) {
+	h := newResourceTestHandler(t, &bytes.Buffer{})
+	for _, test := range []struct {
+		method string
+		uri    string
+	}{
+		{"resources/list", ""},
+		{"resources/templates/list", ""},
+		{"resources/read", catalogURI},
+	} {
+		t.Run(test.method, func(t *testing.T) {
+			params := map[string]any{"_meta": map[string]any{"progressToken": 1}}
+			if test.uri != "" {
+				params["uri"] = test.uri
+			}
+			accepted := decodeResourceResponse(t, resourceRequest(t, h, testBearer, test.method, params))
+			if accepted.Error != nil || accepted.Result == nil {
+				t.Fatalf("params with _meta: %+v", accepted.Error)
+			}
+			params["cursor"] = "unused"
+			rejected := decodeResourceResponse(t, resourceRequest(t, h, testBearer, test.method, params))
+			if rejected.Error == nil || rejected.Error.Code != invalidParams || rejected.Result != nil {
+				t.Fatalf("params with an extra key: %+v", rejected.Error)
+			}
+		})
 	}
 }

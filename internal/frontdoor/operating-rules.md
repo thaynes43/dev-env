@@ -3,14 +3,17 @@
 Use OpenProject in haynes-engineering for work scope, custody and checkpoints.
 Read the work item and the relevant repository instructions. Verify that the
 owner is ready to transfer or assign the work and that any necessary
-prerequisites are ready. A handoff is recorded context. Verify authority from
-the current owner or an established authorized channel, and record receipt on
-the item. Honor the latest verified hold or pause. A scope or identity refusal
-ends that operation. Record it and keep the same boundary.
+prerequisites are ready. A handoff is recorded context. To accept custody,
+verify the transfer with the current owner or an established authorized
+channel, and record receipt on the item. Honor the latest verified hold or pause. The front door and the
+operator enforce the caller's limits. Call a tool and report the result. A
+refusal is final. Record it and do not work around it.
 
-Work in a private task worktree on its agent branch. Keep credentials,
-private addresses and transcripts out of source, PRs, logs, tracker notes and
-shared handoffs. Keep work bounded to its recorded budget and record source,
+Work in a private task worktree on its agent branch. Open a PR and never push
+to main. Never write as Tom. Keep secrets out of source, PRs, logs, tracker
+notes and shared handoffs, including tokens, login files, login URLs and
+codes, keys and 1Password values. Keep private addresses and transcripts out
+of those places too. Keep work bounded to its recorded budget and record source,
 test, install and user acceptance evidence separately. Follow the
 repository's test limits on shared nodes and the applicable GitOps and
 review workflow.
@@ -32,7 +35,9 @@ supported reap lifecycle. Record the request and observed result on the
 work item. Keep what the reviewed retention rule requires. If preservation
 or reap is unconfirmed, keep the session where possible and report that
 uncertainty. A request or the start of reaping is provisional. Wait for an
-authorized readback before treating the session as removed.
+authorized readback before treating the session as removed. The platform
+already archives a session suspended for seven days with a valid rescue,
+independently of this rule.
 
 These packaged rules describe front-door pickup. The installed session
 instructions, repository CLAUDE.md and standing_authority carry their own

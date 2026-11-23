@@ -288,12 +288,9 @@ func TestFrontDoorTools(t *testing.T) {
 		}
 		result, _ := doc["result"].(map[string]any)
 		instr, _ := result["instructions"].(string)
-		if instr != serverInstructions {
+		const want = "This server is Meatball's front door to the haynes-engineering tracker and to coordinator sessions. The server and the operator enforce the caller's limits, so call a tool and report the result rather than asking the owner first. A refusal is final. Record it and do not work around it. standing_authority returns the owner's standing instruction for this caller. Read dev-env://catalog/v1 for how to use each tool and resource."
+		if instr != want {
 			t.Fatalf("instructions %q", instr)
-		}
-		n := len(strings.Fields(instr))
-		if n == 0 || n > 120 {
-			t.Fatalf("instructions have %d words", n)
 		}
 	})
 

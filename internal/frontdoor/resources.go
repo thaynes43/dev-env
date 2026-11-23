@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	kjson "sigs.k8s.io/json"
 
 	"github.com/thaynes43/dev-env/internal/commonrules"
 )
@@ -19,7 +22,7 @@ const (
 	handoffURI       = "dev-env://handoff/v1"
 	handoffPrefix    = handoffURI + "/"
 	handoffTemplate  = handoffPrefix + "{item}"
-	rulesRevision    = "2026-11-23.1"
+	rulesRevision    = "2026-11-23.3"
 	markdownMIME     = "text/markdown"
 	jsonMIME         = "application/json"
 	invalidParams    = -32602
@@ -35,7 +38,9 @@ var catalogText string
 //go:embed operating-rules.md
 var rulesText string
 
-const handoffIndex = "Read dev-env://handoff/v1/{item} with resources/read. Replace {item} with a positive OpenProject item ID. The service checks its configured tracker project. The handoff includes tracker state, recorded owner, journal references and pickup guidance. Verify custody and action-specific authority before acting."
+const handoffIndex = "Read dev-env://handoff/v1/{item} with resources/read. Replace {item} with a positive OpenProject item ID. The service checks its configured tracker project. The handoff includes tracker state, recorded owner, journal references and pickup guidance. Confirm custody with the recorded owner before taking over the item. The server and the operator enforce the caller's limits."
+
+var handoffOwnerPattern = regexp.MustCompile(`^agent \| worktree ([a-z0-9][a-z0-9-]{0,79}) \| branch agent/([a-z0-9][a-z0-9-]{0,79})$`)
 
 var resourceURIPattern = regexp.MustCompile(`^dev-env://[a-z][a-z0-9-]*(/[a-zA-Z0-9-]+)+$`)
 
@@ -54,8 +59,7 @@ var resources = []resource{
 
 func listResources(method string, raw json.RawMessage) (any, *rpcError) {
 	if len(raw) > 0 {
-		var params map[string]json.RawMessage
-		if json.Unmarshal(raw, &params) != nil || params == nil || len(params) != 0 {
+		if params := resourceParams(raw); params == nil || len(params) != 0 {
 			return nil, &rpcError{invalidParams, "invalid resource list parameters"}
 		}
 	}
@@ -122,10 +126,19 @@ func (h *handler) readResource(ctx context.Context, raw json.RawMessage, bearer 
 	}
 }
 
+func resourceParams(raw json.RawMessage) map[string]json.RawMessage {
+	var params map[string]json.RawMessage
+	if json.Unmarshal(raw, &params) != nil {
+		return nil
+	}
+	delete(params, "_meta")
+	return params
+}
+
 func resourceTarget(raw json.RawMessage) (string, int64, *rpcError) {
 	invalid := &rpcError{invalidParams, "invalid resource URI"}
-	var params map[string]json.RawMessage
-	if json.Unmarshal(raw, &params) != nil || len(params) != 1 {
+	params := resourceParams(raw)
+	if len(params) != 1 {
 		return "", 0, invalid
 	}
 	var uri string
@@ -165,10 +178,13 @@ func resourceText(uri, mimeType, text string) map[string]any {
 	return map[string]any{"contents": []map[string]string{{"uri": uri, "mimeType": mimeType, "text": text}}}
 }
 
+const handoffTrackerBaseURL = "https://work.haynesnetwork.com"
+
 // readHandoff uses opwork's scoped, metadata-only JSON mode. Its fixed exit
 // codes distinguish project/auth refusal, absence, and source failure.
 func (h *handler) readHandoff(ctx context.Context, uri string, item int64, bearer string) (any, *rpcError) {
-	text, err := h.work.call(ctx, "show", strconv.FormatInt(item, 10), "--handoff-json")
+	id := strconv.FormatInt(item, 10)
+	text, err := h.work.callStdout(ctx, "show", id, "--handoff-json")
 	unavailable := &rpcError{resourceDown, "handoff tracker unavailable"}
 	if err != nil {
 		var failure *opworkFailure
@@ -182,6 +198,33 @@ func (h *handler) readHandoff(ctx context.Context, uri string, item int64, beare
 		}
 		return nil, unavailable
 	}
+	// childEnv supplies no OPWORK_BASE_URL, so opwork uses its public default.
+	url := handoffTrackerBaseURL + "/projects/" + h.work.project + "/work_packages/" + id
+	data := validatedHandoff(text, h.work.project, item, url, bearer)
+	if data == nil {
+		return nil, unavailable
+	}
+	return resourceText(uri, jsonMIME, string(data)), nil
+}
+
+// These sets mirror the metadata-only projection in opwork.py.
+var (
+	handoffCheckpointStates = []string{"present", "absent", "malformed", "incomplete", "owner-unconfirmed", "blocked", "stale"}
+	handoffStatuses         = []string{
+		"Ungroomed", "Proposed", "Ready", "In progress", "In review", "Accepted", "Rejected",
+		"Closed", "Cancelled", "Blocked", "Needs answer", "Needs approval", "Paused", "Unknown",
+	}
+	handoffNextActions = []string{
+		"Keep the recorded hold and confirm its disposition with the owner.",
+		"Keep the recorded end state and use the item evidence for any authorized follow-up.",
+		"Keep the work paused until its current state and next action are verified.",
+		"A checkpoint carries the recorded owner's label. Its author is unverified. Confirm custody with the recorded owner before acting.",
+		"Confirm an accountable owner and a durable checkpoint before pickup.",
+		"Confirm custody and the next action with the recorded owner before pickup.",
+	}
+)
+
+func validatedHandoff(text, project string, item int64, url, bearer string) []byte {
 	var envelope struct {
 		Schema  string `json:"schema"`
 		Version int    `json:"version"`
@@ -209,25 +252,52 @@ func (h *handler) readHandoff(ctx context.Context, uri string, item int64, beare
 		NextAction string    `json:"nextAction"`
 		CapturedAt time.Time `json:"capturedAt"`
 	}
-	decoder := json.NewDecoder(strings.NewReader(text))
-	decoder.DisallowUnknownFields()
-	if !json.Valid([]byte(text)) || decoder.Decode(&envelope) != nil || envelope.Schema != "dev-env.work-item-handoff" ||
-		envelope.Version != 1 || envelope.TargetScope.Item != item || envelope.TargetScope.Project != h.work.project ||
-		envelope.Owner == "" || envelope.Source.System != "OpenProject" || envelope.Source.URL == "" ||
+	strict, err := kjson.UnmarshalStrict([]byte(text), &envelope)
+	if err != nil || len(strict) != 0 || envelope.Schema != "dev-env.work-item-handoff" ||
+		envelope.Version != 1 || envelope.TargetScope.Item != item || envelope.TargetScope.Project != project ||
+		envelope.Source.System != "OpenProject" || envelope.Source.URL != url ||
 		envelope.Source.LockVersion == nil || *envelope.Source.LockVersion < 0 || envelope.Source.UpdatedAt.IsZero() ||
-		envelope.Source.Checkpoint == "" || envelope.WorkState.Status == "" || envelope.Evidence == nil ||
-		envelope.NextAction == "" || envelope.CapturedAt.IsZero() || scrub(text, bearer) != text {
-		return nil, unavailable
+		envelope.Evidence == nil || len(envelope.Evidence) > 2 || envelope.CapturedAt.IsZero() ||
+		scrub(text, bearer) != text {
+		return nil
 	}
-	switch string(envelope.WorkState.Hold) {
-	case "true", "false", "null":
-	default:
-		return nil, unavailable
-	}
-	for _, ref := range envelope.Evidence {
-		if ref.ActivityID < 1 || ref.CreatedAt.IsZero() || (ref.Kind != "structured-checkpoint" && ref.Kind != "visible-journal") {
-			return nil, unavailable
+	if envelope.Owner != "Unknown" {
+		parts := handoffOwnerPattern.FindStringSubmatch(envelope.Owner)
+		if len(parts) != 3 || parts[1] != parts[2] {
+			return nil
 		}
 	}
-	return resourceText(uri, jsonMIME, text), nil
+	if !slices.Contains(handoffCheckpointStates, envelope.Source.Checkpoint) ||
+		!slices.Contains(handoffStatuses, envelope.WorkState.Status) ||
+		!slices.Contains(handoffNextActions, envelope.NextAction) {
+		return nil
+	}
+	wantHold := "false"
+	switch envelope.WorkState.Status {
+	case "Needs answer", "Needs approval", "Paused":
+		wantHold = "true"
+	case "Unknown":
+		wantHold = "null"
+	}
+	if string(envelope.WorkState.Hold) != wantHold {
+		return nil
+	}
+
+	seenEvidence := make(map[string]bool, 2)
+	for _, ref := range envelope.Evidence {
+		if ref.ActivityID < 1 || ref.CreatedAt.IsZero() || seenEvidence[ref.Kind] ||
+			(ref.Kind != "structured-checkpoint" && ref.Kind != "visible-journal") {
+			return nil
+		}
+		seenEvidence[ref.Kind] = true
+	}
+	hasCheckpoint := slices.Contains([]string{"present", "stale", "blocked", "owner-unconfirmed"}, envelope.Source.Checkpoint)
+	if seenEvidence["structured-checkpoint"] != hasCheckpoint {
+		return nil
+	}
+	data, err := json.Marshal(envelope)
+	if err != nil || scrub(string(data), bearer) != string(data) {
+		return nil
+	}
+	return data
 }

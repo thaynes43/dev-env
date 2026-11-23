@@ -44,6 +44,24 @@ session's exact common inputs and revision stay in the existing
 `standing_authority`. The packaged rules grant no authority and claim no
 matching installed revision. [MCP resources specification](https://modelcontextprotocol.io/specification/2025-03-26/server/resources)
 
+### Rules maintenance proposal for Tom
+
+Add this line to the repository's `CLAUDE.md` under the rule about updating
+docs in the same PR as behavior changes.
+
+> When pickup, custody, hold or retirement rules change in `CLAUDE.md` or the
+> common rules, whoever changes the source rule also updates
+> `internal/frontdoor/operating-rules.md` and its revision in the same PR.
+
+### Initialize instructions
+
+`initialize` returns this 68-word text.
+
+> This server is Meatball's front door to the haynes-engineering tracker and to coordinator sessions. The server and the operator enforce the caller's limits, so call a tool and report the result rather than asking the owner first. A refusal is final. Record it and do not work around it. standing_authority returns the owner's standing instruction for this caller. Read dev-env://catalog/v1 for how to use each tool and resource.
+
+The final sentence points clients to the catalog for tool and resource usage.
+The preceding sentences retain the original instructions.
+
 ## Work-item handoff v1
 
 The front door runs a fixed `opwork show ID --handoff-json` invocation using
@@ -54,10 +72,9 @@ permissions apply. Read one bounded activity page using the check-in
 contract. A changing item lock or inconsistent metadata fails unavailable.
 The projection stays within the current item scope. It does not consult an old
 session, local pending files, provider homes, parent notes or the operator.
-The server configures its operator connection at startup and reads the
-projected operator credential per operator request. An empty or missing
-credential refuses that request locally. Tracker reads and packaged resources
-can serve during an operator credential outage.
+The server requires the operator credential at startup and rereads it for
+each operator request. A loopback resource test uses a non-secret placeholder
+operator token, a closed local API port and a stub opwork.
 An offline `opwork checkpoint` reaches the durable source only when
 `flush` confirms it in the tracker. An existing `checkpoint-update` marker
 can identify a structured checkpoint and its sourcing journal.
@@ -72,26 +89,33 @@ The resource's JSON text uses these fields, all present:
 | `targetScope` | Configured tracker project and exact item. |
 | `workState` | Tracker status and whether it carries an explicit hold, or an unknown hold when status is unrecognized. Only known workflow names are projected. |
 | `evidence` | Bounded journal references with capture timestamps and evidence kind. An empty list means no confirmed reference is in the projection. A journal reference records an available source, with no claim that its contents satisfy acceptance. |
-| `nextAction` | Fixed pickup guidance derived from the item hold/state and the checkpoint observation. An unheld in-progress item calls for confirming custody with the owner. A held item stays held. A current structured checkpoint points to its journal for the recorded action. |
+| `nextAction` | Fixed pickup guidance derived from the item hold/state and the checkpoint observation. An unheld in-progress item calls for confirming custody with the owner. A held item stays held. For `present`, confirm custody with the recorded owner before acting. |
 | `capturedAt` | UTC time of the projection following the tracker reads. |
 
 The resource retains structured checkpoint references to make pickup possible
 after the prior session is gone. Raw comment bodies, a checkpoint's free-form
 text, item descriptions, arbitrary author labels, arbitrary URLs, credentials,
 private addresses and transcripts stay out of this projection. The recipient
-uses the references to consult records under their own authorization.
+uses the references to consult records under their own authorization. A
+receiver with only the bearer learns the owner, state, any hold and whether a
+checkpoint exists. It cannot read the referenced journal or the recorded
+next step.
 Tracker text and the resource are context. Record the receiving agent's
 receipt on the item and verify the owner and hold through the supported
 workflow before any action. The resource makes no claim, transfer, dispatch,
 acceptance or lifecycle decision.
 
-A structured checkpoint has to pass the existing marker and tracker
-provenance checks and match the observed owner. Unknown/malformed/missing
-or superseded checkpoints and incomplete activity pages have an explicit
-observation state. A checkpoint whose check-after passed, that marks itself
-stale, or whose reported owner has changed cannot supply current pickup
-guidance. The work-item state remains observed. Dates are recorded at their
-source. Reading the handoff does not refresh an old checkpoint.
+The checkpoint check establishes label consistency with the recorded owner.
+Authorship is unverified. Another tracker user can post the same label and
+produce a `present` checkpoint. Missing, malformed, stale, blocked,
+owner-unconfirmed and incomplete observations have explicit states. A
+checkpoint whose check-after has passed or that marks itself stale supplies
+no current pickup guidance. A blocked or missing-ACK checkpoint takes
+priority over staleness. While an unchanged checkpoint's far-future
+check-after remains in the future, later ordinary journal activity leaves it
+`present` until the owner changes. The work-item state remains observed.
+Dates are recorded at their source. Reading the handoff does not refresh an
+old checkpoint.
 
 ## Authorization and audit
 
@@ -107,19 +131,20 @@ distinguish people or clients holding it. It logs request time, allowlisted
 operation and result, with no URI, item ID, arguments, result text or bearer.
 The client receipt can reference the item, timestamp and redacted status.
 Every resource read uses the same four slots and 90-second deadline as tool
-calls. A client disconnect cancels tracker work.
+calls. The resource list methods take no call slot. A client disconnect
+cancels tracker work.
 
 ## Failure and uncertainty
 
 | Branch | Front-door result or source behavior |
 | --- | --- |
 | Wrong or absent bearer | HTTP 401, empty body. |
-| Invalid read parameters or malformed URI | JSON-RPC `-32602`, `invalid resource URI`. No tracker call. List methods accept an omitted or empty parameter object and have no cursor. |
+| Invalid read parameters or malformed URI | JSON-RPC `-32602`, `invalid resource URI`. No tracker call. All three methods ignore `_meta` and refuse other extra keys. List methods have no cursor. |
 | Well-formed unregistered resource or absent/hidden work item | `-32002`, `resource not found`. A masked tracker 404 cannot establish why the item is hidden. |
 | Project exclusion or tracker 401/403 | `-32003`, `handoff read refused`. Stop and record the result. |
 | Tracker failure, deadline, missing CLI support, changing or malformed source | `-32004`, `handoff tracker unavailable`. No partial handoff. |
 | All call slots in use | `-32005`, `busy, try again`. No upstream call. |
-| Missing, stale, superseded, malformed or unconfirmed checkpoint | Successful current item projection with explicit checkpoint uncertainty where the item and bounded history can be read. No checkpoint authority is inferred. |
+| Missing, stale, blocked, malformed or unconfirmed checkpoint | Successful current item projection with explicit checkpoint uncertainty where the item and bounded history can be read. No checkpoint authority is inferred. |
 | Usage with only the front-door bearer | No usage resource or tool is registered. A guessed usage URI is `resource not found`. |
 | Existing usage GET unauthorized | HTTP 401 or 403. Stop on an auth or scope refusal and retain its diagnostic. |
 | Existing usage GET missing, conflicting or unavailable | A disabled or absent route, conflict, transport failure and invalid body keep their own CLI outcome. The usage CLI does not follow redirects or retry. |
@@ -129,9 +154,13 @@ calls. A client disconnect cancels tracker work.
 
 The operating rules carry this rule. A session is active when it has live or
 pending work, a hold, a live or unconfirmed thread, or unconfirmed activity.
-An inactive session without verified cutover is abandoned and kept pending
-review. A retire candidate is a confirmed inactive session with a separately
-reviewed retirement decision and verified preservation. A paused or suspended
+Unconfirmed pending work also keeps the session active for custody. A
+confirmed inactive session with a clear hold and reap state remains
+`abandoned` and kept for review when the retirement decision or successor
+disposition is unconfirmed. Other incomplete observations and preservation
+checks produce `blocked` and keep the session. A retire candidate is a
+confirmed inactive session with a separately reviewed retirement decision
+and verified preservation. A paused or suspended
 phase and elapsed time alone are insufficient.
 
 Before retirement, verify the durable checkpoint on its work item, the
@@ -149,7 +178,9 @@ preservation or removal is unconfirmed, keep the session where possible,
 report the uncertainty and seek a supported readback. Never treat the reap
 request as a removal receipt. No repeated or destructive action follows an
 uncertain result. The classifier only proposes review. Unknown input keeps
-custody, and the inventory is read-only.
+custody, and the inventory is read-only. The platform already archives a
+session suspended for seven days with a valid rescue, independently of this
+rule.
 
 For a dry run, build the offline classifier and give it a sanitized snapshot:
 
@@ -160,7 +191,10 @@ bin/session-retire-dry-run < /private/sanitized-records.json
 
 The input is a JSON array of records with `session` and `phase`. Record
 `execution` as `live` or `stopped`, `hold` as `present` or `clear`, and
-`reap` as `pending` or `clear` only when confirmed. For `retirement`,
+`reap` as `pending` or `clear` only when confirmed. Record `nativeThread`
+and `activity` as `live` or `clear`, and `pendingWork` as `present` or
+`clear`. Each needs an explicit `clear` to classify the session inactive.
+For `retirement`,
 `checkpoint`, `branchAndHead`, `unpushedCommits`, `uncommittedChanges`,
 and `retention`, use `verified` only for reviewed evidence for that exact
 session and stopped workspace. Use `acknowledged` or `not-required`
@@ -171,38 +205,46 @@ and any later authorized action requires fresh, independently verified proof.
 
 ## Access changes proposed, not made
 
-- Dot usage needs an exact `GET /v1/provider-allowances` admission for
-  CallerPolicy `dev-env-system/meatball` and the projected
-  `dev-env-system/dev-env-meatball` identity. The operator's
-  [positive route list](../../../../internal/apiserver/callerpolicy.go#L135)
-  and the allowance GET handler's [reader predicate](../../../../internal/apiserver/provider_allowance_reports.go#L446) both require review.
-  The existing identity is bound at line 9 of haynes-ops
-  `kubernetes/main/apps/dev-env-system/frontdoor/app/callerpolicy.yaml`. Use
-  the operator's existing store access, with a narrow projection of provider,
-  source, times, windows and freshness. No direct ConfigMap right or new
-  credential for the front door. OP509 owns freshness and OP529 owns the
-  distinct least-privilege receipt.
-- Package the catalog, rules and opwork projection into the front-door image.
-  An eventual rollout changes only
-  `Deployment/dev-env-frontdoor.spec.template.spec.containers[name=frontdoor].image`
-  at line 115 of haynes-ops
-  `kubernetes/main/apps/dev-env-system/frontdoor/app/deployment.yaml`
-  (signed digest after merge). No new arguments or mounts are required.
-  Delivery of the cluster's exact common rule text would need a future review
-  of that Deployment's `spec.template.spec.volumes` and container
-  `volumeMounts` (lines 204 and 174 respectively) or a scoped operator route. This slice publishes the
-  reviewed packaged text.
-- The existing ServiceAccount rights, bearer and tracker Secrets,
-  ExternalSecrets, ingress `/mcp` match and NetworkPolicies need no change.
-  A second recipient needs independent approved use of the existing
-  front-door scope. An identity or token distribution change requires its own
-  explicit authorization. Give the recipient a work-item URI and a receipt
-  request, never a copied bearer.
-- No retention change is required for the classifier. Any future change to
-  the operator Deployment's task clean-up arguments, session archive
-  thresholds or retained rescue/log/PVC rules needs its own reviewed design
-  and exact GitOps field. See [DESIGN-061](061-task-session-cleanup.md) and
-  [ADR-020](../adrs/020-task-session-cleanup.md) for the controlling lifecycle.
+Manifest references below were read at haynes-ops commit
+`158abfd8232a78d00d935236f6027f8e3f4db5c1`.
+
+- Serve resources during an operator credential outage.
+- Verified checkpoint provenance needs a per-session tracker identity or a signed marker.
+- A handoff v2 could return the checkpoint's `next_action` and `evidence`
+  only for state `present`. Bound and scrub both fields and mark them as
+  unverified tracker text.
+- Dot usage needs an exact `GET /v1/provider-allowances` admission for the
+  identity bound by `CallerPolicy/dev-env-system/meatball.spec.serviceAccount`
+  in `frontdoor/app/callerpolicy.yaml`. Review the operator's
+  `policyCallerAllowed` route list and the allowance handler's
+  `AggregateAllowanceReports.allow` reader predicate. Use the operator's
+  existing store access with a narrow projection of provider, source, times,
+  windows and freshness. OP509 owns freshness and OP529 owns the distinct
+  least-privilege receipt.
+- A later rollout would pin the signed front-door image in
+  `Deployment/dev-env-system/dev-env-frontdoor.spec.template.spec.containers[name=frontdoor].image`
+  in `frontdoor/app/deployment.yaml`. Serving the exact installed common
+  rules would need future review of that Deployment's
+  `spec.template.spec.volumes` and
+  `spec.template.spec.containers[name=frontdoor].volumeMounts` or a scoped
+  operator route. This slice publishes the reviewed packaged text.
+- The same Deployment's `spec.template.spec.serviceAccountName` selects
+  `ServiceAccount/dev-env-system/dev-env-meatball`. The bearer and tracker
+  Secret names come from `spec.target.name` on
+  `ExternalSecret/dev-env-system/dev-env-frontdoor-token` and
+  `ExternalSecret/dev-env-system/dev-env-frontdoor-openproject`.
+  The `IngressRoute/dev/dev-env-frontdoor`
+  binds `/mcp` in `spec.routes[].match`. The
+  `CiliumNetworkPolicy/dev-env-system/dev-env-frontdoor` and
+  `CiliumNetworkPolicy/frontend/openproject-frontdoor-api` constrain
+  traffic in `spec.ingress` and, for the first policy, `spec.egress`.
+  Give an independently authorized recipient the work-item URI and a receipt
+  request. Identity and token distribution need separate authorization.
+- The classifier reads offline records. Future changes to task cleanup or
+  archive flags in `HelmRelease/dev-env-operator.spec.values.controllers.dev-env-operator.containers.app.args`
+  in `operator/app/helmrelease.yaml`, or to rescue, log or PVC retention,
+  need their own reviewed design. See [DESIGN-061](061-task-session-cleanup.md)
+  and [ADR-020](../adrs/020-task-session-cleanup.md).
 
 ## Evidence
 
@@ -212,3 +254,15 @@ only the throwaway bearer. The worker's allowance read uses only its existing
 authorized route. If that route refuses it, the receipt records the refusal.
 Installation is a later GitOps pin. Acceptance is Dot's two independently
 scoped live reads and Tom's disposition on OP529.
+
+## Follow-ups for Tom
+
+- Review exact front-door access for the usage GET.
+- Decide whether handoff v2 should return bounded, scrubbed and explicitly
+  unverified checkpoint text for `present`.
+- Decide whether to verify checkpoint authorship through a per-session
+  tracker identity or a signed marker.
+- Decide whether to serve resource reads during an operator credential outage.
+- Review the proposed repository `CLAUDE.md` maintenance line above.
+- Review adding the retired-session rule to the haynes-ops common rules
+  in `session-config/app/config/claude/CLAUDE.md`.

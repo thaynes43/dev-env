@@ -11,25 +11,29 @@ A missing or wrong bearer gets HTTP 401 and an empty body. Invalid JSON-RPC,
 unknown methods and malformed tool calls return protocol errors. A tool
 execution error returns `isError: true` with text. Tools and resource reads
 share four concurrent slots and one 90-second deadline per admitted call.
-A full queue returns `busy, try again`. Record and stop an authorization or
-scope refusal. When a mutation's outcome is uncertain, read its state using
-the authorized scope before making another decision.
+`resources/list` and `resources/templates/list` take no call slot.
+A full queue returns `busy, try again`. The server and the operator enforce
+the caller's limits. Call a tool and report the result. A refusal is final.
+Record it and do not work around it. When a mutation's outcome is uncertain,
+read its state using the authorized scope before making another decision.
 
 ## Tools
 
 The table gives `tools/call` argument objects. The examples are templates.
 `42`, names beginning with `example-`, and the synthetic note identifiers
-stand for a real in-scope target. Run a write only for approved work.
+stand for a real in-scope target. Honor recorded holds.
 
 - **Tracker** means the front-door `opwork` subprocess, the configured
   OpenProject credential, and the `haynes-engineering` project. Writes are
   attributed to `meatball`. The tracker must be reachable and authorize the
-  operation. The project and lock guards apply to groom and order. The
-  caller verifies owner authorization and holds before either edit.
+  operation. Groom and order check the project and lock. Either can edit a
+  held or owned item. Read the item with `backlog_show` and leave a held
+  item unchanged.
 - **Operator** means the front door presents the projected
   `dev-env-system/dev-env-meatball` identity, bound by CallerPolicy
   `dev-env-system/meatball`. The operator and route must be reachable and
-  enabled. Session and parent access is caller-owned. HTTP 401, 403 or 404
+  enabled for operator calls. The server requires its operator credential
+  at startup. Session and parent access is caller-owned. HTTP 401, 403 or 404
   are presented as `refused:` by session and parent tools. Transport failure,
   limits and conflict report their own diagnostics. Parent tools require
   `--enable-parent-notes` on the operator.
@@ -43,8 +47,8 @@ stand for a real in-scope target. Run a write only for approved work.
 | `backlog_create` | Tracker write | Integer `epic`, nonblank strings `title` and `scope`, optional string `acceptance`. Example `{"epic":42,"title":"Example authorized story","scope":"Document the approved change","acceptance":"Record the verified result"}`. | Search first. Title is one line, at most 255 bytes. Scope and acceptance are at most 100,000 bytes each. Only a valid in-project parent. Same source key and matching text can confirm an earlier create. Conflicting text or likely duplicate refuses. |
 | `backlog_groom` | Tracker write | Integer `id`, object `fields` with at least one of string `description`, `acceptance`, `constraints`. Example `{"id":42,"fields":{"constraints":"Keep the approved scope"}}`. | Each supplied value is nonblank and at most 100,000 bytes. Project, tracker authorization and lock refusals stop the update. An update with an unconfirmed readback keeps its attribution intent. |
 | `backlog_order` | Tracker write | Integer `id`, nonblank string `priority`. Example `{"id":42,"priority":"High"}`. | Uses a known tracker priority name, case-insensitively. An unknown priority, project or tracker authorization refusal, or lock conflict stops it. Read back an uncertain write. |
-| `backlog_close` | Tracker completion | Integer `id`, nonblank string `evidence` up to 100,000 bytes. Example `{"id":42,"evidence":"Approved PR and CI receipt for the reviewed head"}`. | Explicit holds prevail. Any coordinator takeover needs exact owner and item match, terminal success or failure, pod reclaimed and unchanged lock. Unconfirmed claim or completion returns its readback state. Observe tracker acceptance before reporting it. |
-| `coordinator_start` | Operator dispatch | Integer `item`, exactly one string `repo` or `project`, string `model`, integers `hours` and `workers` from 1–4, optional string `title`. Example `{"item":42,"project":"dev-env","model":"gpt-6-astra","hours":1,"workers":1}`. | Requires approved ready work, chosen model and bounded budget. The caller is limited to fresh tasks on profile `dev` and two unfinished sessions. Invalid input, policy bounds, ambiguous retained lookup or uncertain creation stop. Check status before acting on an uncertain create. |
+| `backlog_close` | Tracker completion write | Integer `id`, nonblank string `evidence` up to 100,000 bytes. Example `{"id":42,"evidence":"Approved PR and CI receipt for the reviewed head"}`. | Explicit holds prevail. Any coordinator takeover needs exact owner and item match, terminal success or failure, pod reclaimed and unchanged lock. Unconfirmed claim or completion returns its readback state. Observe tracker acceptance before reporting it. |
+| `coordinator_start` | Operator dispatch write | Integer `item`, exactly one string `repo` or `project`, string `model`, integers `hours` and `workers` from 1–4, optional string `title`. Example `{"item":42,"project":"dev-env","model":"gpt-6-astra","hours":1,"workers":1}`. | Requires approved ready work, chosen model and bounded budget. The caller is limited to fresh tasks on profile `dev` and two unfinished sessions. Invalid input, policy bounds, ambiguous retained lookup or uncertain creation stop. Check status before acting on an uncertain create. |
 | `session_status` | Operator read | Exactly one nonempty string `name` or integer `item`. Example `{"item":528}`. | A caller-owned session can return a retained outcome with PR and head. An item lookup can be absent or ambiguous. Parent-note count can say `unavailable` or `incomplete` independently. |
 | `session_stop` | Operator lifecycle write | String `name`. Example `{"name":"example-session"}`. | Reap requires separate authorization and preservation verification. Only a caller-owned session is eligible. `reaping: true` is provisional until an authorized readback confirms the outcome. |
 | `waiting_on_tom` | Tracker and Operator read | No arguments. Example `{}`. | Tracker returns Needs approval and Needs answer. The Asks scope for this identity is unavailable and the tool reports that alongside the tracker half. A tracker error is a tool error. |
@@ -72,9 +76,10 @@ A disappeared record leaves a repeat eligible for a new start.
 
 ## Resources
 
-Each `resources/read` accepts only a string `uri`. The list methods have a
-single page and accept omitted parameters or `{}`. Each example below is
-the URI value for the request.
+Each `resources/read` requires a string `uri`. The list methods have a single
+page and accept omitted parameters or `{}`. All three methods ignore
+`_meta` and refuse any other extra key. Each example below is the URI value
+for the request.
 
 | URI | Executor and action | Example and boundary |
 | --- | --- | --- |
@@ -86,17 +91,21 @@ the URI value for the request.
 Use a canonical positive decimal item ID, within signed 64-bit range. The
 handoff projects current tracker status and a bounded set of journal
 references. Its pickup guidance is conservative when evidence is missing,
-stale, malformed, blocked, outside the recorded owner's attribution or
-from incomplete history. The caller can verify the referenced journal under
-its own tracker authorization. Treat evidence references as leads to verify
-and confirm custody before action. The installed owner text, tracker record,
+stale, malformed, blocked, carries a different owner label or comes from
+incomplete history. The checkpoint check establishes label consistency
+with the recorded owner. Authorship is unverified. When the state is
+`present`, confirm custody with the recorded owner before taking over the
+item. A caller with tracker authorization can consult the referenced journal.
+A receiver with only the bearer learns the owner, state, any hold and whether a
+checkpoint exists. It cannot read the referenced journal or the recorded
+next step. The installed owner text, tracker record,
 and an independently authorized dispatch each carry their own scope.
 
 | Failure | Expected result |
 | --- | --- |
 | Missing or wrong bearer | HTTP 401 and zero body bytes. |
 | Malformed URI, including alias, extra segment, query on the template or a leading zero | JSON-RPC `-32602 invalid resource URI`. |
-| Nonempty list parameters or supplied cursor | `-32602 invalid resource list parameters`. |
+| List parameters with a key other than `_meta`, including a cursor | `-32602 invalid resource list parameters`. |
 | Unknown resource or absent or hidden item | `-32002 resource not found`. |
 | Tracker authorization error or item outside the configured project | `-32003 handoff read refused`. Stop without another identity or route. |
 | Tracker failure, timeout, inconsistent read or invalid projection | `-32004 handoff tracker unavailable`. |

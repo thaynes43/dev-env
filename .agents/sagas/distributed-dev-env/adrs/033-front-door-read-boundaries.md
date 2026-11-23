@@ -8,6 +8,9 @@ versioned operating rules with the binary. Derive a bounded work-item handoff
 from the existing opwork item and read-only activity contracts. Keep one
 stable versioned format with owner, source, item scope, state, evidence,
 next action and capture time. Unknown checkpoint state remains explicit.
+The checkpoint check establishes label consistency with the recorded owner.
+Authorship is unverified. When the state is `present`, confirm custody with
+the recorded owner before acting.
 
 The handoff transports references and context. Existing tracker and caller
 authorizations remain required for every write, dispatch and lifecycle

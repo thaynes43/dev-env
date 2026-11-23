@@ -34,10 +34,10 @@ before it is returned.
 The operator token is sent only to the operator, as `Authorization: Bearer`.
 The tracker credential is passed to opwork by file path (`OPWORK_TOKEN_FILE`)
 and is not an argument. Neither file is logged. The process does not call the
-Kubernetes API and does not mint a token. A missing bearer file or tracker
-file stops it before it listens. The operator token is checked per operator
-request. If it is missing or empty, those requests fail locally while project
-tracker and packaged resource reads remain available.
+Kubernetes API and does not mint a token. The bearer and operator credential
+files must be readable and nonempty before the process listens. The tracker
+credential file must be regular, nonempty and at most 64 KiB.
+A missing authority file does not prevent startup.
 
 ## Tools
 
@@ -266,7 +266,9 @@ is false. A client must not retry it on its own.
 
 `initialize` returns `instructions` beside `protocolVersion`,
 `capabilities` and `serverInfo`. It points to tool and resource discovery
-and reminds clients to check action-specific authority.
+in 68 words. The server and the operator enforce the caller's
+limits. Call a tool and report the result. Record a refusal and stop that
+operation without trying another identity or route.
 
 ## Resources
 

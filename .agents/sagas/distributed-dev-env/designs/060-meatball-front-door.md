@@ -519,6 +519,7 @@ the operator enforce the caller's limits, so call a tool and report the result
 rather than asking the owner first. A refusal is final. Record it and do not
 work around it. standing_authority returns the owner's standing instruction
 for this caller."
+See [DESIGN-071](071-front-door-discovery-and-handoffs.md#initialize-instructions) for the current text.
 
 `standing_authority` takes no arguments. Its description is at most 30 words,
 like the others. The eleven descriptions together were 142 words at OP546;
