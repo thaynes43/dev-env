@@ -7,9 +7,12 @@ package main
 type sessionRecord struct {
 	Session            string `json:"session"`
 	Phase              string `json:"phase"`
-	Execution          string `json:"execution,omitempty"` // live or stopped
-	Hold               string `json:"hold,omitempty"`      // present or clear
-	Reap               string `json:"reap,omitempty"`      // pending or clear
+	Execution          string `json:"execution,omitempty"`    // live or stopped
+	NativeThread       string `json:"nativeThread,omitempty"` // live or clear
+	PendingWork        string `json:"pendingWork,omitempty"`  // present or clear
+	Activity           string `json:"activity,omitempty"`     // live or clear
+	Hold               string `json:"hold,omitempty"`         // present or clear
+	Reap               string `json:"reap,omitempty"`         // pending or clear
 	Retirement         string `json:"retirement,omitempty"`
 	Checkpoint         string `json:"checkpoint,omitempty"`
 	BranchAndHead      string `json:"branchAndHead,omitempty"`
@@ -38,6 +41,21 @@ func classify(record sessionRecord) classification {
 	if record.Hold == "present" {
 		result.Reasons = append(result.Reasons, "explicit-hold")
 	}
+	for _, observation := range []struct {
+		value, active, reason string
+	}{
+		{record.NativeThread, "live", "native-thread"},
+		{record.PendingWork, "present", "pending-work"},
+		{record.Activity, "live", "activity"},
+	} {
+		switch observation.value {
+		case observation.active:
+			result.Reasons = append(result.Reasons, observation.reason+"-observed")
+		case "clear":
+		default:
+			result.Reasons = append(result.Reasons, observation.reason+"-unconfirmed")
+		}
+	}
 	if len(result.Reasons) > 0 {
 		result.Class = "active"
 		if record.Reap == "pending" {
@@ -47,11 +65,13 @@ func classify(record sessionRecord) classification {
 	}
 
 	stoppedPhase := record.Phase == "Suspended" || record.Phase == "Failed"
+	stopped := stoppedPhase && record.Execution == "stopped"
+	successorConfirmed := record.Successor == "acknowledged" || record.Successor == "not-required"
 	checks := []struct {
 		confirmed bool
 		reason    string
 	}{
-		{stoppedPhase && record.Execution == "stopped", "execution-unconfirmed"},
+		{stopped, "execution-unconfirmed"},
 		{record.Hold == "clear", "hold-unconfirmed"},
 		{record.Reap == "clear", "reap-unconfirmed"},
 		{record.Retirement == "verified", "retirement-unconfirmed"},
@@ -59,7 +79,7 @@ func classify(record sessionRecord) classification {
 		{record.BranchAndHead == "verified", "branch-head-unconfirmed"},
 		{record.UnpushedCommits == "verified", "unpushed-commits-unconfirmed"},
 		{record.UncommittedChanges == "verified", "uncommitted-changes-unconfirmed"},
-		{record.Successor == "acknowledged" || record.Successor == "not-required", "successor-unconfirmed"},
+		{successorConfirmed, "successor-unconfirmed"},
 		{record.Retention == "verified", "retention-unconfirmed"},
 	}
 	for _, check := range checks {
@@ -71,6 +91,9 @@ func classify(record sessionRecord) classification {
 		result.Class = "retire candidate"
 		result.Decision = "review"
 		result.Reasons = []string{"retirement-and-preservation-verified"}
+	} else if stopped && record.Hold == "clear" && record.Reap == "clear" &&
+		(record.Retirement != "verified" || !successorConfirmed) {
+		result.Class = "abandoned"
 	}
 	return result
 }

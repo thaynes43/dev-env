@@ -147,9 +147,13 @@ calls. A client disconnect cancels tracker work.
 
 The operating rules carry this rule. A session is active when it has live or
 pending work, a hold, a live or unconfirmed thread, or unconfirmed activity.
-An inactive session without verified cutover is abandoned and kept pending
-review. A retire candidate is a confirmed inactive session with a separately
-reviewed retirement decision and verified preservation. A paused or suspended
+Unconfirmed pending work also keeps the session active for custody. A
+confirmed inactive session with a clear hold and reap state remains
+`abandoned` and kept for review when the retirement decision or successor
+disposition is unconfirmed. Other incomplete observations and preservation
+checks produce `blocked` and keep the session. A retire candidate is a
+confirmed inactive session with a separately reviewed retirement decision
+and verified preservation. A paused or suspended
 phase and elapsed time alone are insufficient.
 
 Before retirement, verify the durable checkpoint on its work item, the
@@ -178,7 +182,10 @@ bin/session-retire-dry-run < /private/sanitized-records.json
 
 The input is a JSON array of records with `session` and `phase`. Record
 `execution` as `live` or `stopped`, `hold` as `present` or `clear`, and
-`reap` as `pending` or `clear` only when confirmed. For `retirement`,
+`reap` as `pending` or `clear` only when confirmed. Record `nativeThread`
+and `activity` as `live` or `clear`, and `pendingWork` as `present` or
+`clear`. Each needs an explicit `clear` to classify the session inactive.
+For `retirement`,
 `checkpoint`, `branchAndHead`, `unpushedCommits`, `uncommittedChanges`,
 and `retention`, use `verified` only for reviewed evidence for that exact
 session and stopped workspace. Use `acknowledged` or `not-required`
