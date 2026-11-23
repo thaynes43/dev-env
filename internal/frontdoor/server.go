@@ -36,8 +36,8 @@ const (
 
 // serverInstructions is InitializeResult.instructions in the MCP schema for
 // protocol 2025-03-26 and 2025-11-25, beside protocolVersion, capabilities
-// and serverInfo. It is 58 words, under the 120 word limit.
-const serverInstructions = "This server is Meatball's front door to the haynes-engineering tracker and to coordinator sessions. The server and the operator enforce the caller's limits, so call a tool and report the result rather than asking the owner first. A refusal is final. Record it and do not work around it. standing_authority returns the owner's standing instruction for this caller."
+// and serverInfo. Keep it under 120 words.
+const serverInstructions = "This server is Meatball's front door to the haynes-engineering tracker and to coordinator sessions. The server and the operator enforce the caller's limits, so call a tool and report the result rather than asking the owner first. A refusal is final. Record it and do not work around it. standing_authority returns the owner's standing instruction for this caller. Read dev-env://catalog/v1 for how to use each tool and resource."
 
 // toolDeadline is one deadline for a tool call, shared by the operator client
 // and the opwork process. It starts when the call is admitted and ends early
@@ -179,7 +179,8 @@ func knownPath(path string) string {
 }
 
 func knownRPC(method string) string {
-	return fixedLabel(method, "initialize", "ping", "tools/list", "tools/call")
+	return fixedLabel(method, "initialize", "ping", "tools/list", "tools/call",
+		"resources/list", "resources/templates/list", "resources/read")
 }
 
 func knownTool(name string) string {
@@ -294,7 +295,9 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request, bearer string) {
 	}
 	result, rpcErr, session := h.dispatch(r.Context(), req.Method, req.Params, bearer)
 	if rpcErr != nil {
-		h.log.Printf("rpc %s %d", knownRPC(req.Method), rpcErr.Code)
+		if req.Method != "resources/read" {
+			h.log.Printf("rpc %s %d", knownRPC(req.Method), rpcErr.Code)
+		}
 		h.reply(w, r, mcpError(*req.ID, rpcErr.Code, rpcErr.Message))
 		return
 	}
@@ -309,7 +312,7 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request, bearer string) {
 		}
 		_ = json.Unmarshal(req.Params, &call)
 		h.log.Printf("rpc tools/call %s", knownTool(call.Name))
-	} else {
+	} else if req.Method != "resources/read" {
 		h.log.Printf("rpc %s", knownRPC(req.Method))
 	}
 	if session != "" {
@@ -328,14 +331,23 @@ func (h *handler) dispatch(ctx context.Context, method string, params json.RawMe
 	case "initialize":
 		return map[string]any{
 			"protocolVersion": negotiate(params),
-			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "dev-env-frontdoor", "version": version.Get().Version},
-			"instructions":    serverInstructions,
+			"capabilities": map[string]any{
+				"tools":     map[string]any{"listChanged": false},
+				"resources": map[string]any{},
+			},
+			"serverInfo":   map[string]any{"name": "dev-env-frontdoor", "version": version.Get().Version},
+			"instructions": serverInstructions,
 		}, nil, newSession()
 	case "ping":
 		return map[string]any{}, nil, ""
 	case "tools/list":
 		return map[string]any{"tools": frontDoorTools}, nil, ""
+	case "resources/list", "resources/templates/list":
+		result, err := listResources(method, params)
+		return result, err, ""
+	case "resources/read":
+		result, err := h.readResource(ctx, params, bearer)
+		return result, err, ""
 	case "tools/call":
 		var call struct {
 			Name      string          `json:"name"`

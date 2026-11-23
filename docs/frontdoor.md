@@ -11,7 +11,9 @@ The process accepts one bearer token. A request without that exact token gets
 `WWW-Authenticate` header. The token is read from a file on each request and
 is never logged. A log line names a fixed HTTP method, the path `/mcp` or
 `unknown`, and a fixed JSON-RPC method (`initialize`, `ping`, `tools/list`,
-`tools/call`, or `unknown`). It does not contain a raw path or a raw method.
+`tools/call`, `resources/list`, `resources/templates/list`, `resources/read`,
+or `unknown`). Resource reads log a fixed operation and outcome. Raw paths,
+methods, resource URIs and content are omitted.
 Tool text is scrubbed of that token and of an OpenProject `opapi-` token
 before it is returned.
 
@@ -32,31 +34,17 @@ before it is returned.
 The operator token is sent only to the operator, as `Authorization: Bearer`.
 The tracker credential is passed to opwork by file path (`OPWORK_TOKEN_FILE`)
 and is not an argument. Neither file is logged. The process does not call the
-Kubernetes API and does not mint a token. A missing bearer file or tracker
-file stops it before it listens. A missing authority file does not.
+Kubernetes API and does not mint a token. The bearer and operator credential
+files must be readable and nonempty before the process listens. The tracker
+credential file must be regular, nonempty and at most 64 KiB.
+A missing authority file does not prevent startup.
 
 ## Tools
 
-`tools/list` returns these fifteen tools. Each description is at most 30 words,
-and the descriptions together are 222 words.
-
-| Tool | What it does |
-|---|---|
-| `backlog_find` | Find work items by text, status, or parent epic. Read only. |
-| `backlog_show` | Read one work item, including scope, acceptance, and constraints. |
-| `backlog_create` | Create a story under an epic. Search first. The write is attributed to meatball, not Tom. |
-| `backlog_groom` | Replace an item's scope, acceptance, or constraints, then read the item back. |
-| `backlog_order` | Set an item's priority, which decides what goes next, then read it back. |
-| `backlog_close` | Close with evidence; caller's coordinator takeover requires reclaimed pod and stopped workers. Holds stay held; retry reclaim refusals later. |
-| `coordinator_start` | Start one coordinator for an item. Model is required and is the full id Tom named. No effort. Optional title is role text set at create. |
-| `session_status` | Read one session this caller started, by name or item, including any retained outcome. |
-| `session_stop` | Stop one session this caller started. A refusal from the operator is reported plainly. |
-| `waiting_on_tom` | List open Asks for this caller's sessions and items that need Tom's approval or answer. |
-| `standing_authority` | Read the owner's standing instruction installed for this caller. |
-| `parent_waiting` | List notes waiting from sessions this caller started. Names, kinds and ages only. |
-| `parent_read` | Read one note to this caller, including its text, from a session this caller started. |
-| `parent_answer` | Store one answer to a note from a session this caller started. A second different answer is refused. |
-| `parent_send` | Send one message to a session this caller started. The session reads it with its next parent read. |
+[Dot's catalog and runbook](../internal/frontdoor/catalog.md) lists each tool
+and resource with its parameters, scope, example and failure boundaries. The
+same page is served at `dev-env://catalog/v1`. `tools/list` returns 15
+schemas. Each tool description is at most 30 words and they total 222 words.
 
 A tool failure is a result with `isError` true and a plain-text message. An
 unknown tool name is a JSON-RPC error.
@@ -276,11 +264,21 @@ is false. A client must not retry it on its own.
 
 ## Instructions
 
-`initialize` returns `instructions`, the `InitializeResult` field in both
-schemas, beside `protocolVersion`, `capabilities` and `serverInfo`. The text
-is 58 words:
+`initialize` returns `instructions` beside `protocolVersion`,
+`capabilities` and `serverInfo`. It points to tool and resource discovery
+in 68 words. The server and the operator enforce the caller's
+limits. Call a tool and report the result. Record a refusal and stop that
+operation without trying another identity or route.
 
-> This server is Meatball's front door to the haynes-engineering tracker and to coordinator sessions. The server and the operator enforce the caller's limits, so call a tool and report the result rather than asking the owner first. A refusal is final. Record it and do not work around it. standing_authority returns the owner's standing instruction for this caller.
+## Resources
+
+`resources/list` exposes the catalog, versioned operating rules and handoff
+lookup guidance on the existing `/mcp` endpoint. `resources/templates/list`
+advertises the per-item handoff URI. The server has a fixed, read-only
+resource set without subscriptions. Work-item reads use the existing
+project-scoped OpenProject credential through a bounded opwork projection.
+See [DESIGN-071](../.agents/sagas/distributed-dev-env/designs/071-front-door-discovery-and-handoffs.md)
+for the handoff format and authority boundaries.
 
 ## Standing authority
 
@@ -299,10 +297,11 @@ text, changed only by a PR he approves. This repository installs none.
 
 ## Limits
 
-Each tool call has one deadline of 90 seconds. The operator client and the
-opwork process share it, and a client disconnect cancels both. At most 4 tool
-calls run at once. Another call is a tool error, `busy, try again`, and starts
-no operator request and no opwork process.
+Each tool call or resource read has one deadline of 90 seconds. The operator
+client and the opwork process share it, and a client disconnect cancels both.
+At most four tool calls or resource reads run at once. Excess calls return
+`busy, try again` as a tool error or resource RPC error before contacting any
+backend.
 
 ## What the cluster needs
 

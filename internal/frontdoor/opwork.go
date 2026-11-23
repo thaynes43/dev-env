@@ -48,6 +48,14 @@ type opworkFailure struct {
 func (e *opworkFailure) Error() string { return fmt.Sprintf("opwork exited %d", e.code) }
 
 func (o opwork) call(ctx context.Context, args ...string) (string, error) {
+	return o.run(ctx, false, args...)
+}
+
+func (o opwork) callStdout(ctx context.Context, args ...string) (string, error) {
+	return o.run(ctx, true, args...)
+}
+
+func (o opwork) run(ctx context.Context, stdoutOnly bool, args ...string) (string, error) {
 	if o.path == "" {
 		return "", errors.New("opwork is not configured")
 	}
@@ -65,6 +73,12 @@ func (o opwork) call(ctx context.Context, args ...string) (string, error) {
 	stdout.max, stderr.max = opworkOutputCap, opworkOutputCap
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
+	if err == nil && stdoutOnly {
+		if stdout.truncated {
+			return "", errors.New("opwork stdout was truncated")
+		}
+		return stdout.String(), nil
+	}
 	text := joinOutput(stdout.String(), stderr.String(), stdout.truncated || stderr.truncated)
 	text = scrub(text, "")
 	if err == nil {
