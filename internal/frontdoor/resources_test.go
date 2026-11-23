@@ -104,21 +104,31 @@ func TestCatalogMatchesMCPDiscovery(t *testing.T) {
 	if string(initialized.Capabilities["resources"]) != "{}" {
 		t.Fatalf("missing read-only resources capability: %v", initialized.Capabilities)
 	}
+	type schema struct {
+		Properties map[string]schema
+		Required   []string
+	}
 	tools := resourceResult[struct {
-		Tools []struct{ Name string }
+		Tools []struct {
+			Name        string
+			InputSchema schema
+			Annotations struct{ ReadOnlyHint *bool }
+		}
 	}](t, resourceRequest(t, h, testBearer, "tools/list", nil))
 	listed := resourceResult[struct{ Resources []resource }](t, resourceRequest(t, h, testBearer, "resources/list", nil))
 	templates := resourceResult[struct {
 		ResourceTemplates []struct{ URITemplate string }
 	}](t, resourceRequest(t, h, testBearer, "resources/templates/list", nil))
 	catalog := resourceContent(t, h, catalogURI, markdownMIME)
-	rows := regexp.MustCompile("(?m)^\\| `([^`]+)` \\|").FindAllStringSubmatch(catalog, -1)
+	rows := regexp.MustCompile("(?m)^\\| `([^`]+)` \\| ([^|\n]+) \\| ([^|\n]+) \\|").FindAllStringSubmatch(catalog, -1)
+	toolRows := make(map[string][]string)
 	var names, uris, wantedNames, wantedURIs []string
 	for _, row := range rows {
 		if strings.HasPrefix(row[1], "dev-env://") {
 			uris = append(uris, row[1])
 		} else {
 			names = append(names, row[1])
+			toolRows[row[1]] = row
 		}
 	}
 	for _, tool := range tools.Tools {
@@ -132,6 +142,35 @@ func TestCatalogMatchesMCPDiscovery(t *testing.T) {
 	}
 	if !slices.Equal(names, wantedNames) || !slices.Equal(uris, wantedURIs) {
 		t.Fatalf("catalog drift: tools %v vs %v, URIs %v vs %v", names, wantedNames, uris, wantedURIs)
+	}
+	var checkArguments func(tool, args string, input schema)
+	checkArguments = func(tool, args string, input schema) {
+		for name, property := range input.Properties {
+			if !strings.Contains(args, "`"+name+"`") {
+				t.Errorf("catalog %s row omits property %q", tool, name)
+			}
+			checkArguments(tool, args, property)
+		}
+		for _, required := range input.Required {
+			if !strings.Contains(args, "`"+required+"`") {
+				t.Errorf("catalog %s row omits required parameter %q", tool, required)
+			}
+		}
+	}
+	for _, tool := range tools.Tools {
+		row := toolRows[tool.Name]
+		checkArguments(tool.Name, row[3], tool.InputSchema)
+		if tool.Annotations.ReadOnlyHint == nil {
+			t.Errorf("%s has no readOnlyHint", tool.Name)
+			continue
+		}
+		want := "write"
+		if *tool.Annotations.ReadOnlyHint {
+			want = "read"
+		}
+		if !strings.HasSuffix(row[2], " "+want) {
+			t.Errorf("catalog %s action %q must end in %q", tool.Name, row[2], want)
+		}
 	}
 }
 
