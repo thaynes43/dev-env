@@ -287,7 +287,6 @@ esac
 
 func TestHandoffProjectionValidation(t *testing.T) {
 	const url = "https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528"
-	const evidence = `{"kind":"structured-checkpoint","activityId":1,"createdAt":"2026-11-23T12:00:00Z"}`
 	for _, test := range []struct {
 		name, from, to string
 	}{
@@ -297,9 +296,12 @@ func TestHandoffProjectionValidation(t *testing.T) {
 		{"checkpoint enum", `"checkpoint":"present"`, `"checkpoint":"other"`},
 		{"status enum", `"status":"In progress"`, `"status":"other"`},
 		{"hold must be boolean or null", `"hold":false`, `"hold":"false"`},
+		{"unheld status with true hold", `"hold":false`, `"hold":true`},
+		{"known status with null hold", `"hold":false`, `"hold":null`},
+		{"unknown status with false hold", `"status":"In progress"`, `"status":"Unknown"`},
+		{"held status with false hold", `"status":"In progress"`, `"status":"Needs approval"`},
 		{"next action allowlist", "Confirm custody with the recorded owner before acting.", "Use upstream prose."},
 		{"evidence kind enum", "structured-checkpoint", "other"},
-		{"at most two evidence entries", evidence, evidence + "," + evidence + "," + evidence},
 		{"duplicate top-level key", `"version":1`, `"version":2,"version":1`},
 		{"duplicate nested key", `"checkpoint":"present"`, `"checkpoint":"other","checkpoint":"present"`},
 		{"case-sensitive keys", `"checkpoint":`, `"Checkpoint":`},
@@ -312,6 +314,39 @@ func TestHandoffProjectionValidation(t *testing.T) {
 			}
 			if validatedHandoff(text, defaultProject, 528, url, testBearer) != nil {
 				t.Fatal("invalid tracker projection accepted")
+			}
+		})
+	}
+}
+
+func TestHandoffEvidenceCombinations(t *testing.T) {
+	const url = "https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528"
+	const evidence = `{"kind":"structured-checkpoint","activityId":1,"createdAt":"2026-11-23T12:00:00Z"}`
+	const journal = `{"kind":"visible-journal","activityId":2,"createdAt":"2026-11-23T12:00:00Z"}`
+	for _, test := range []struct {
+		name, checkpoint string
+		refs             []string
+		valid            bool
+	}{
+		{"one of each kind", "present", []string{evidence, journal}, true},
+		{"visible journal alone", "absent", []string{journal}, true},
+		{"absent checkpoint without evidence", "absent", nil, true},
+		{"at most two evidence entries", "present", []string{evidence, journal, journal}, false},
+		{"duplicate checkpoint evidence", "present", []string{evidence, strings.Replace(evidence, `"activityId":1`, `"activityId":3`, 1)}, false},
+		{"duplicate visible journal evidence", "absent", []string{journal, strings.Replace(journal, `"activityId":2`, `"activityId":3`, 1)}, false},
+		{"absent checkpoint with reference", "absent", []string{evidence}, false},
+		{"incomplete checkpoint with reference", "incomplete", []string{evidence}, false},
+		{"malformed checkpoint with reference", "malformed", []string{evidence}, false},
+		{"present checkpoint without reference", "present", []string{journal}, false},
+		{"stale checkpoint without reference", "stale", nil, false},
+		{"blocked checkpoint without reference", "blocked", nil, false},
+		{"owner-unconfirmed checkpoint without reference", "owner-unconfirmed", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text := strings.Replace(handoffFixture, `"checkpoint":"present"`, `"checkpoint":"`+test.checkpoint+`"`, 1)
+			text = strings.Replace(text, evidence, strings.Join(test.refs, ","), 1)
+			if valid := validatedHandoff(text, defaultProject, 528, url, testBearer) != nil; valid != test.valid {
+				t.Fatalf("valid = %t, want %t", valid, test.valid)
 			}
 		})
 	}

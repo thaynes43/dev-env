@@ -261,15 +261,28 @@ func validatedHandoff(text, project string, item int64, url, bearer string) []by
 		}, envelope.NextAction) {
 		return nil
 	}
-	switch string(envelope.WorkState.Hold) {
-	case "true", "false", "null":
-	default:
+	wantHold := "false"
+	switch envelope.WorkState.Status {
+	case "Needs answer", "Needs approval", "Paused":
+		wantHold = "true"
+	case "Unknown":
+		wantHold = "null"
+	}
+	if string(envelope.WorkState.Hold) != wantHold {
 		return nil
 	}
+
+	seenEvidence := make(map[string]bool, 2)
 	for _, ref := range envelope.Evidence {
-		if ref.ActivityID < 1 || ref.CreatedAt.IsZero() || (ref.Kind != "structured-checkpoint" && ref.Kind != "visible-journal") {
+		if ref.ActivityID < 1 || ref.CreatedAt.IsZero() || seenEvidence[ref.Kind] ||
+			(ref.Kind != "structured-checkpoint" && ref.Kind != "visible-journal") {
 			return nil
 		}
+		seenEvidence[ref.Kind] = true
+	}
+	hasCheckpoint := slices.Contains([]string{"present", "stale", "blocked", "owner-unconfirmed"}, envelope.Source.Checkpoint)
+	if seenEvidence["structured-checkpoint"] != hasCheckpoint {
+		return nil
 	}
 	data, err := json.Marshal(envelope)
 	if err != nil || scrub(string(data), bearer) != string(data) {
