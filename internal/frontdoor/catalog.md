@@ -13,9 +13,9 @@ execution error returns `isError: true` with text. Tools and resource reads
 share four concurrent slots and one 90-second deadline per admitted call.
 `resources/list` and `resources/templates/list` take no call slot.
 A full queue returns `busy, try again`. The server and the operator enforce
-the caller’s limits. Call a tool and report the result. A refusal is final.
-Record it and do not work around it. When a mutation's outcome is uncertain, read its state using
-the authorized scope before making another decision.
+the caller's limits. Call a tool and report the result. A refusal is final.
+Record it and do not work around it. When a mutation's outcome is uncertain,
+read its state using the authorized scope before making another decision.
 
 ## Tools
 

@@ -111,7 +111,7 @@ produce a `present` checkpoint. Missing, malformed, stale, blocked,
 owner-unconfirmed and incomplete observations have explicit states. A
 checkpoint whose check-after has passed or that marks itself stale supplies
 no current pickup guidance. A blocked or missing-ACK checkpoint takes
-priority over staleness. While an unchanged checkpoint’s far-future
+priority over staleness. While an unchanged checkpoint's far-future
 check-after remains in the future, later ordinary journal activity leaves it
 `present` until the owner changes. The work-item state remains observed.
 Dates are recorded at their source. Reading the handoff does not refresh an
@@ -210,25 +210,25 @@ Manifest references below were read at haynes-ops commit
 
 - Serve resources during an operator credential outage.
 - Verified checkpoint provenance needs a per-session tracker identity or a signed marker.
-- A handoff v2 could return the checkpoint’s `next_action` and `evidence`
+- A handoff v2 could return the checkpoint's `next_action` and `evidence`
   only for state `present`. Bound and scrub both fields and mark them as
   unverified tracker text.
 - Dot usage needs an exact `GET /v1/provider-allowances` admission for the
   identity bound by `CallerPolicy/dev-env-system/meatball.spec.serviceAccount`
-  in `frontdoor/app/callerpolicy.yaml`. Review the operator’s
-  `policyCallerAllowed` route list and the allowance handler’s
-  `AggregateAllowanceReports.allow` reader predicate. Use the operator’s
+  in `frontdoor/app/callerpolicy.yaml`. Review the operator's
+  `policyCallerAllowed` route list and the allowance handler's
+  `AggregateAllowanceReports.allow` reader predicate. Use the operator's
   existing store access with a narrow projection of provider, source, times,
   windows and freshness. OP509 owns freshness and OP529 owns the distinct
   least-privilege receipt.
 - A later rollout would pin the signed front-door image in
   `Deployment/dev-env-system/dev-env-frontdoor.spec.template.spec.containers[name=frontdoor].image`
   in `frontdoor/app/deployment.yaml`. Serving the exact installed common
-  rules would need future review of that Deployment’s
+  rules would need future review of that Deployment's
   `spec.template.spec.volumes` and
   `spec.template.spec.containers[name=frontdoor].volumeMounts` or a scoped
   operator route. This slice publishes the reviewed packaged text.
-- The same Deployment’s `spec.template.spec.serviceAccountName` selects
+- The same Deployment's `spec.template.spec.serviceAccountName` selects
   `ServiceAccount/dev-env-system/dev-env-meatball`. The bearer and tracker
   Secret names come from `spec.target.name` on
   `ExternalSecret/dev-env-system/dev-env-frontdoor-token` and

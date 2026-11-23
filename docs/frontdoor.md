@@ -34,8 +34,9 @@ before it is returned.
 The operator token is sent only to the operator, as `Authorization: Bearer`.
 The tracker credential is passed to opwork by file path (`OPWORK_TOKEN_FILE`)
 and is not an argument. Neither file is logged. The process does not call the
-Kubernetes API and does not mint a token. The bearer, tracker and operator
-credential files must be readable and nonempty before the process listens.
+Kubernetes API and does not mint a token. The bearer and operator credential
+files must be readable and nonempty before the process listens. The tracker
+credential file must be regular, nonempty and at most 64 KiB.
 A missing authority file does not prevent startup.
 
 ## Tools
