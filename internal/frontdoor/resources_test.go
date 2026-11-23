@@ -186,8 +186,8 @@ esac
 	}
 	t.Run("successful opwork uses stdout despite stderr", func(t *testing.T) {
 		handoff := resourceContent(t, h, handoffPrefix+"528", jsonMIME)
-		if strings.TrimSpace(handoff) != handoffFixture {
-			t.Fatal("handoff did not use the versioned document on stdout")
+		if handoff != handoffFixture {
+			t.Fatal("handoff did not marshal the validated document from stdout")
 		}
 	})
 
@@ -226,5 +226,37 @@ esac
 		!strings.Contains(logs.String(), "rpc resources/read handoff refused") ||
 		!strings.Contains(logs.String(), "rpc resources/read handoff unavailable") {
 		t.Fatalf("unexpected audit output: %s", &logs)
+	}
+}
+
+func TestHandoffProjectionValidation(t *testing.T) {
+	const url = "https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528"
+	const evidence = `{"kind":"structured-checkpoint","activityId":1,"createdAt":"2026-11-23T12:00:00Z"}`
+	for _, test := range []struct {
+		name, from, to string
+	}{
+		{"owner must have the recognized format", "agent | worktree worker | branch agent/worker", "upstream prose"},
+		{"owner branch must match worktree", "branch agent/worker", "branch agent/other"},
+		{"owner must fit the slug bound", "worktree worker | branch agent/worker", "worktree " + strings.Repeat("w", 81) + " | branch agent/" + strings.Repeat("w", 81)},
+		{"checkpoint enum", `"checkpoint":"present"`, `"checkpoint":"other"`},
+		{"status enum", `"status":"In progress"`, `"status":"other"`},
+		{"hold must be boolean or null", `"hold":false`, `"hold":"false"`},
+		{"next action allowlist", "Confirm custody with the recorded owner before acting.", "Use upstream prose."},
+		{"evidence kind enum", "structured-checkpoint", "other"},
+		{"at most two evidence entries", evidence, evidence + "," + evidence + "," + evidence},
+		{"duplicate top-level key", `"version":1`, `"version":2,"version":1`},
+		{"duplicate nested key", `"checkpoint":"present"`, `"checkpoint":"other","checkpoint":"present"`},
+		{"case-sensitive keys", `"checkpoint":`, `"Checkpoint":`},
+		{"exact work item URL", url, url + "?other"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text := strings.Replace(handoffFixture, test.from, test.to, 1)
+			if text == handoffFixture {
+				t.Fatal("mutation did not apply")
+			}
+			if validatedHandoff(text, defaultProject, 528, url, testBearer) != nil {
+				t.Fatal("invalid tracker projection accepted")
+			}
+		})
 	}
 }

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/commonrules"
+	kjson "sigs.k8s.io/json"
 )
 
 const (
@@ -36,6 +38,8 @@ var catalogText string
 var rulesText string
 
 const handoffIndex = "Read dev-env://handoff/v1/{item} with resources/read. Replace {item} with a positive OpenProject item ID. The service checks its configured tracker project. The handoff includes tracker state, recorded owner, journal references and pickup guidance. Verify custody and action-specific authority before acting."
+
+var handoffOwnerPattern = regexp.MustCompile(`^agent \| worktree ([a-z0-9][a-z0-9-]{0,79}) \| branch agent/([a-z0-9][a-z0-9-]{0,79})$`)
 
 var resourceURIPattern = regexp.MustCompile(`^dev-env://[a-z][a-z0-9-]*(/[a-zA-Z0-9-]+)+$`)
 
@@ -168,7 +172,8 @@ func resourceText(uri, mimeType, text string) map[string]any {
 // readHandoff uses opwork's scoped, metadata-only JSON mode. Its fixed exit
 // codes distinguish project/auth refusal, absence, and source failure.
 func (h *handler) readHandoff(ctx context.Context, uri string, item int64, bearer string) (any, *rpcError) {
-	text, err := h.work.callStdout(ctx, "show", strconv.FormatInt(item, 10), "--handoff-json")
+	id := strconv.FormatInt(item, 10)
+	text, err := h.work.callStdout(ctx, "show", id, "--handoff-json")
 	unavailable := &rpcError{resourceDown, "handoff tracker unavailable"}
 	if err != nil {
 		var failure *opworkFailure
@@ -182,6 +187,16 @@ func (h *handler) readHandoff(ctx context.Context, uri string, item int64, beare
 		}
 		return nil, unavailable
 	}
+	// childEnv supplies no OPWORK_BASE_URL, so opwork uses its public default.
+	url := "https://work.haynesnetwork.com/projects/" + h.work.project + "/work_packages/" + id
+	data := validatedHandoff(text, h.work.project, item, url, bearer)
+	if data == nil {
+		return nil, unavailable
+	}
+	return resourceText(uri, jsonMIME, string(data)), nil
+}
+
+func validatedHandoff(text, project string, item int64, url, bearer string) []byte {
 	var envelope struct {
 		Schema  string `json:"schema"`
 		Version int    `json:"version"`
@@ -209,25 +224,47 @@ func (h *handler) readHandoff(ctx context.Context, uri string, item int64, beare
 		NextAction string    `json:"nextAction"`
 		CapturedAt time.Time `json:"capturedAt"`
 	}
-	decoder := json.NewDecoder(strings.NewReader(text))
-	decoder.DisallowUnknownFields()
-	if !json.Valid([]byte(text)) || decoder.Decode(&envelope) != nil || envelope.Schema != "dev-env.work-item-handoff" ||
-		envelope.Version != 1 || envelope.TargetScope.Item != item || envelope.TargetScope.Project != h.work.project ||
-		envelope.Owner == "" || envelope.Source.System != "OpenProject" || envelope.Source.URL == "" ||
+	strict, err := kjson.UnmarshalStrict([]byte(text), &envelope)
+	if err != nil || len(strict) != 0 || envelope.Schema != "dev-env.work-item-handoff" ||
+		envelope.Version != 1 || envelope.TargetScope.Item != item || envelope.TargetScope.Project != project ||
+		envelope.Source.System != "OpenProject" || envelope.Source.URL != url ||
 		envelope.Source.LockVersion == nil || *envelope.Source.LockVersion < 0 || envelope.Source.UpdatedAt.IsZero() ||
-		envelope.Source.Checkpoint == "" || envelope.WorkState.Status == "" || envelope.Evidence == nil ||
-		envelope.NextAction == "" || envelope.CapturedAt.IsZero() || scrub(text, bearer) != text {
-		return nil, unavailable
+		envelope.Evidence == nil || len(envelope.Evidence) > 2 || envelope.CapturedAt.IsZero() ||
+		scrub(text, bearer) != text {
+		return nil
+	}
+	if envelope.Owner != "Unknown" {
+		parts := handoffOwnerPattern.FindStringSubmatch(envelope.Owner)
+		if len(parts) != 3 || parts[1] != parts[2] {
+			return nil
+		}
+	}
+	// These sets mirror the metadata-only projection in opwork.py.
+	if !slices.Contains([]string{"present", "absent", "malformed", "incomplete", "owner-unconfirmed", "blocked", "stale"}, envelope.Source.Checkpoint) ||
+		!slices.Contains([]string{"Ungroomed", "Proposed", "Ready", "In progress", "In review", "Accepted", "Rejected", "Closed", "Cancelled", "Blocked", "Needs answer", "Needs approval", "Paused", "Unknown"}, envelope.WorkState.Status) ||
+		!slices.Contains([]string{
+			"Keep the recorded hold and confirm its disposition with the owner.",
+			"Keep the recorded end state and use the item evidence for any authorized follow-up.",
+			"Keep the work paused until its current state and next action are verified.",
+			"A checkpoint carries the recorded owner's label. Its author is unverified. Confirm custody with the recorded owner before acting.",
+			"Confirm an accountable owner and a durable checkpoint before pickup.",
+			"Confirm custody and the next action with the recorded owner before pickup.",
+		}, envelope.NextAction) {
+		return nil
 	}
 	switch string(envelope.WorkState.Hold) {
 	case "true", "false", "null":
 	default:
-		return nil, unavailable
+		return nil
 	}
 	for _, ref := range envelope.Evidence {
 		if ref.ActivityID < 1 || ref.CreatedAt.IsZero() || (ref.Kind != "structured-checkpoint" && ref.Kind != "visible-journal") {
-			return nil, unavailable
+			return nil
 		}
 	}
-	return resourceText(uri, jsonMIME, text), nil
+	data, err := json.Marshal(envelope)
+	if err != nil || scrub(string(data), bearer) != string(data) {
+		return nil
+	}
+	return data
 }
