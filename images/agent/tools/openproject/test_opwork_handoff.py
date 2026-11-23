@@ -114,7 +114,16 @@ class HandoffProjection(unittest.TestCase):
 
         doc = self.document(request)
         self.assertEqual(doc["source"]["checkpoint"], "incomplete")
-        self.assertEqual(doc["evidence"][0]["kind"], "visible-journal")
+        self.assertEqual(doc["evidence"], [])
+
+    def test_complete_history_can_include_visible_journal(self):
+        note = checkpoint()
+        note["comment"] = {"raw": PRIVATE}
+        self.fake.acts[528] = [note]
+        doc = self.document()
+        self.assertEqual(doc["source"]["checkpoint"], "absent")
+        self.assertEqual(doc["evidence"], [{"kind": "visible-journal", "activityId": 90,
+                                          "createdAt": "2025-01-01T00:00:00+00:00"}])
 
     def test_unknown_workflow_values_are_not_returned(self):
         self.item["customField2"] = PRIVATE

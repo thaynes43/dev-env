@@ -687,13 +687,14 @@ def show_handoff(t, a):
         state = state if state in HANDOFF_STATES else "Unknown"
         checkpoint, ref = handoff_checkpoint(acts, complete, owner, now)
         evidence = [ref] if ref else []
-        visible = [(created, act["id"]) for act in acts
-                   if type(act.get("id")) is int and act["id"] > 0
-                   and (created := utc_time(act.get("createdAt"))) is not None and created <= now]
-        if visible:
-            created, journal = max(visible)
-            if not ref or ref["activityId"] != journal:
-                evidence.append({"kind": "visible-journal", "activityId": journal, "createdAt": created.isoformat()})
+        if complete:
+            visible = [(created, act["id"]) for act in acts
+                       if type(act.get("id")) is int and act["id"] > 0
+                       and (created := utc_time(act.get("createdAt"))) is not None and created <= now]
+            if visible:
+                created, journal = max(visible)
+                if not ref or ref["activityId"] != journal:
+                    evidence.append({"kind": "visible-journal", "activityId": journal, "createdAt": created.isoformat()})
         return json.dumps({
             "schema": "dev-env.work-item-handoff", "version": 1, "owner": owner,
             "source": {"system": "OpenProject", "url": wp_url(a.id), "lockVersion": lock,
