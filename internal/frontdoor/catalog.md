@@ -26,7 +26,9 @@ stand for a real in-scope target. Honor recorded holds.
 - **Tracker** means the front-door `opwork` subprocess, the configured
   OpenProject credential, and the `haynes-engineering` project. Writes are
   attributed to `meatball`. The tracker must be reachable and authorize the
-  operation. The project and lock guards apply to groom and order.
+  operation. Groom and order check the project and lock. Either can edit a
+  held or owned item. Read the item with `backlog_show` and leave a held
+  item unchanged.
 - **Operator** means the front door presents the projected
   `dev-env-system/dev-env-meatball` identity, bound by CallerPolicy
   `dev-env-system/meatball`. The operator and route must be reachable and
