@@ -650,10 +650,10 @@ def handoff_checkpoint(acts, complete, owner, now):
     ref = {"kind": "structured-checkpoint", "activityId": source["activity_id"], "createdAt": created.isoformat()}
     if owner == "Unknown" or author != owner:
         return "owner-unconfirmed", ref
-    if meta.get("stale") is True or utc_time(meta["check_after"]) <= now:
-        return "stale", ref
     if meta.get("blocked") is True or meta.get("ack") is False:
         return "blocked", ref
+    if meta.get("stale") is True or utc_time(meta["check_after"]) <= now:
+        return "stale", ref
     return "present", ref
 
 

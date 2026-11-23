@@ -94,6 +94,15 @@ class HandoffProjection(unittest.TestCase):
                 self.assertEqual(doc["source"]["checkpoint"], expected)
                 self.assertNotIn("Its author is unverified.", doc["nextAction"])
 
+    def test_blocked_or_missing_ack_takes_priority_over_stale(self):
+        for flags in ({"blocked": True}, {"ack": False}):
+            with self.subTest(flags=flags):
+                self.fake.acts[528] = [checkpoint(check_after="2025-01-02T00:00:00Z", **flags)]
+                doc = self.document()
+                self.assertEqual(doc["source"]["checkpoint"], "blocked")
+                self.assertEqual(doc["nextAction"],
+                                 "Keep the work paused until its current state and next action are verified.")
+
     def test_incomplete_history_reports_uncertainty(self):
         self.fake.acts[528] = [checkpoint()]
 
