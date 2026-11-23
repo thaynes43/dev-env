@@ -19,7 +19,7 @@ const (
 	handoffURI       = "dev-env://handoff/v1"
 	handoffPrefix    = handoffURI + "/"
 	handoffTemplate  = handoffPrefix + "{item}"
-	rulesRevision    = "2026-11-23.1"
+	rulesRevision    = "2026-11-23.2"
 	markdownMIME     = "text/markdown"
 	jsonMIME         = "application/json"
 	invalidParams    = -32602

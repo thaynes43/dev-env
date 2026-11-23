@@ -44,6 +44,15 @@ session's exact common inputs and revision stay in the existing
 `standing_authority`. The packaged rules grant no authority and claim no
 matching installed revision. [MCP resources specification](https://modelcontextprotocol.io/specification/2025-03-26/server/resources)
 
+### Initialize instructions
+
+`initialize` returns this 68-word text.
+
+> This server is Meatball's front door to the haynes-engineering tracker and to coordinator sessions. The server and the operator enforce the caller's limits, so call a tool and report the result rather than asking the owner first. A refusal is final. Record it and do not work around it. standing_authority returns the owner's standing instruction for this caller. Read dev-env://catalog/v1 for how to use each tool and resource.
+
+The final sentence points clients to the catalog for tool and resource usage.
+The preceding sentences retain the original instructions.
+
 ## Work-item handoff v1
 
 The front door runs a fixed `opwork show ID --handoff-json` invocation using

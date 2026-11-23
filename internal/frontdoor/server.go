@@ -37,7 +37,7 @@ const (
 // serverInstructions is InitializeResult.instructions in the MCP schema for
 // protocol 2025-03-26 and 2025-11-25, beside protocolVersion, capabilities
 // and serverInfo. Keep it under 120 words.
-const serverInstructions = "This is Meatball's front door to the haynes-engineering tracker and caller-scoped sessions. Discover tool parameters with tools/list and the catalog, operating rules and work-item handoffs with resources/list and resources/templates/list. Use standing_authority for this caller's installed owner instructions. Verify action-specific authorization before writes, dispatch or stop. Record a refusal and stop that operation."
+const serverInstructions = "This server is Meatball's front door to the haynes-engineering tracker and to coordinator sessions. The server and the operator enforce the caller's limits, so call a tool and report the result rather than asking the owner first. A refusal is final. Record it and do not work around it. standing_authority returns the owner's standing instruction for this caller. Read dev-env://catalog/v1 for how to use each tool and resource."
 
 // toolDeadline is one deadline for a tool call, shared by the operator client
 // and the opwork process. It starts when the call is admitted and ends early

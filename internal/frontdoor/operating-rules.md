@@ -5,8 +5,9 @@ Read the work item and the relevant repository instructions. Verify that the
 owner is ready to transfer or assign the work and that any necessary
 prerequisites are ready. A handoff is recorded context. Verify authority from
 the current owner or an established authorized channel, and record receipt on
-the item. Honor the latest verified hold or pause. A scope or identity refusal
-ends that operation. Record it and keep the same boundary.
+the item. Honor the latest verified hold or pause. The front door and the
+operator enforce the caller's limits. Call a tool and report the result. A
+refusal is final. Record it and do not work around it.
 
 Work in a private task worktree on its agent branch. Keep credentials,
 private addresses and transcripts out of source, PRs, logs, tracker notes and

@@ -265,7 +265,9 @@ is false. A client must not retry it on its own.
 
 `initialize` returns `instructions` beside `protocolVersion`,
 `capabilities` and `serverInfo`. It points to tool and resource discovery
-and reminds clients to check action-specific authority.
+in 68 words. The server and the operator enforce the caller's
+limits. Call a tool and report the result. Record a refusal and stop that
+operation without trying another identity or route.
 
 ## Resources
 

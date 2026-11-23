@@ -11,21 +11,21 @@ A missing or wrong bearer gets HTTP 401 and an empty body. Invalid JSON-RPC,
 unknown methods and malformed tool calls return protocol errors. A tool
 execution error returns `isError: true` with text. Tools and resource reads
 share four concurrent slots and one 90-second deadline per admitted call.
-A full queue returns `busy, try again`. Record and stop an authorization or
-scope refusal. When a mutation's outcome is uncertain, read its state using
+A full queue returns `busy, try again`. The server and the operator enforce
+the caller’s limits. Call a tool and report the result. A refusal is final.
+Record it and do not work around it. When a mutation's outcome is uncertain, read its state using
 the authorized scope before making another decision.
 
 ## Tools
 
 The table gives `tools/call` argument objects. The examples are templates.
 `42`, names beginning with `example-`, and the synthetic note identifiers
-stand for a real in-scope target. Run a write only for approved work.
+stand for a real in-scope target. Honor recorded holds.
 
 - **Tracker** means the front-door `opwork` subprocess, the configured
   OpenProject credential, and the `haynes-engineering` project. Writes are
   attributed to `meatball`. The tracker must be reachable and authorize the
-  operation. The project and lock guards apply to groom and order. The
-  caller verifies owner authorization and holds before either edit.
+  operation. The project and lock guards apply to groom and order.
 - **Operator** means the front door presents the projected
   `dev-env-system/dev-env-meatball` identity, bound by CallerPolicy
   `dev-env-system/meatball`. The operator and route must be reachable and
