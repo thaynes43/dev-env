@@ -58,9 +58,22 @@ class HandoffProjection(unittest.TestCase):
         self.assertIsNotNone(opwork.utc_time(doc["capturedAt"]))
         self.assertEqual(doc["evidence"], [{"kind": "structured-checkpoint", "activityId": 90,
                                           "createdAt": "2025-01-01T00:00:00+00:00"}])
-        self.assertIn("referenced checkpoint", doc["nextAction"])
+        self.assertIn("Confirm custody with the recorded owner", doc["nextAction"])
         self.assertEqual([path for _, path, _ in self.fake.calls], [
             ITEM, "/api/v3/projects/haynes-engineering", ITEM + "/activities?pageSize=100&offset=1", ITEM])
+
+    def test_same_label_from_another_tracker_user_is_present(self):
+        earlier = checkpoint()
+        later = checkpoint()
+        later.update(id=91, createdAt="2025-01-02T00:00:00Z")
+        later["_links"]["user"]["href"] = "/api/v3/users/6"
+        self.fake.acts[528] = [earlier, later]
+        doc = self.document()
+        self.assertEqual(doc["source"]["checkpoint"], "present")
+        self.assertEqual(doc["evidence"][0]["activityId"], 91)
+        self.assertEqual(doc["nextAction"],
+                         "A checkpoint carries the recorded owner's label. Its author is unverified. "
+                         "Confirm custody with the recorded owner before acting.")
 
     def test_explicit_hold_has_priority(self):
         self.fake.acts[528] = [checkpoint()]
@@ -79,7 +92,7 @@ class HandoffProjection(unittest.TestCase):
                 self.fake.acts[528] = acts
                 doc = self.document()
                 self.assertEqual(doc["source"]["checkpoint"], expected)
-                self.assertNotIn("referenced checkpoint", doc["nextAction"])
+                self.assertNotIn("Its author is unverified.", doc["nextAction"])
 
     def test_incomplete_history_reports_uncertainty(self):
         self.fake.acts[528] = [checkpoint()]

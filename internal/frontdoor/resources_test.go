@@ -123,7 +123,7 @@ func TestCatalogMatchesMCPDiscovery(t *testing.T) {
 	}
 }
 
-const handoffFixture = `{"schema":"dev-env.work-item-handoff","version":1,"owner":"agent | worktree worker | branch agent/worker","source":{"system":"OpenProject","url":"https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528","lockVersion":7,"updatedAt":"2026-11-23T12:00:00Z","checkpoint":"present"},"targetScope":{"project":"haynes-engineering","item":528},"workState":{"status":"In progress","hold":false},"evidence":[{"kind":"structured-checkpoint","activityId":1,"createdAt":"2026-11-23T12:00:00Z"}],"nextAction":"Confirm custody and consult the referenced checkpoint for the recorded next action.","capturedAt":"2026-11-23T13:00:00Z"}`
+const handoffFixture = `{"schema":"dev-env.work-item-handoff","version":1,"owner":"agent | worktree worker | branch agent/worker","source":{"system":"OpenProject","url":"https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528","lockVersion":7,"updatedAt":"2026-11-23T12:00:00Z","checkpoint":"present"},"targetScope":{"project":"haynes-engineering","item":528},"workState":{"status":"In progress","hold":false},"evidence":[{"kind":"structured-checkpoint","activityId":1,"createdAt":"2026-11-23T12:00:00Z"}],"nextAction":"A checkpoint carries the recorded owner's label. Its author is unverified. Confirm custody with the recorded owner before acting.","capturedAt":"2026-11-23T13:00:00Z"}`
 
 func TestReadResources(t *testing.T) {
 	var logs bytes.Buffer

@@ -80,7 +80,7 @@ The resource's JSON text uses these fields, all present:
 | `targetScope` | Configured tracker project and exact item. |
 | `workState` | Tracker status and whether it carries an explicit hold, or an unknown hold when status is unrecognized. Only known workflow names are projected. |
 | `evidence` | Bounded journal references with capture timestamps and evidence kind. An empty list means no confirmed reference is in the projection. A journal reference records an available source, with no claim that its contents satisfy acceptance. |
-| `nextAction` | Fixed pickup guidance derived from the item hold/state and the checkpoint observation. An unheld in-progress item calls for confirming custody with the owner. A held item stays held. A current structured checkpoint points to its journal for the recorded action. |
+| `nextAction` | Fixed pickup guidance derived from the item hold/state and the checkpoint observation. An unheld in-progress item calls for confirming custody with the owner. A held item stays held. For `present`, confirm custody with the recorded owner before acting. |
 | `capturedAt` | UTC time of the projection following the tracker reads. |
 
 The resource retains structured checkpoint references to make pickup possible
@@ -93,8 +93,9 @@ receipt on the item and verify the owner and hold through the supported
 workflow before any action. The resource makes no claim, transfer, dispatch,
 acceptance or lifecycle decision.
 
-A structured checkpoint has to pass the existing marker and tracker
-provenance checks and match the observed owner. Unknown/malformed/missing
+The checkpoint check establishes label consistency with the recorded owner.
+Authorship is unverified. Another tracker user can post the same label and
+produce a `present` checkpoint. Unknown, malformed, missing
 or superseded checkpoints and incomplete activity pages have an explicit
 observation state. A checkpoint whose check-after passed, that marks itself
 stale, or whose reported owner has changed cannot supply current pickup
@@ -180,6 +181,7 @@ and any later authorized action requires fresh, independently verified proof.
 ## Access changes proposed, not made
 
 - Serve resources during an operator credential outage.
+- Verified checkpoint provenance needs a per-session tracker identity or a signed marker.
 
 - Dot usage needs an exact `GET /v1/provider-allowances` admission for
   CallerPolicy `dev-env-system/meatball` and the projected

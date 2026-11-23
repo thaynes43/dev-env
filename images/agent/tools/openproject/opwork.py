@@ -665,7 +665,7 @@ def handoff_next_action(status, owner, checkpoint):
     if status in {"Unknown", "Blocked"} or checkpoint == "blocked":
         return "Keep the work paused until its current state and next action are verified."
     if checkpoint == "present":
-        return "Confirm custody and consult the referenced checkpoint for the recorded next action."
+        return "A checkpoint carries the recorded owner's label. Its author is unverified. Confirm custody with the recorded owner before acting."
     if owner == "Unknown":
         return "Confirm an accountable owner and a durable checkpoint before pickup."
     return "Confirm custody and the next action with the recorded owner before pickup."

@@ -87,10 +87,11 @@ the URI value for the request.
 Use a canonical positive decimal item ID, within signed 64-bit range. The
 handoff projects current tracker status and a bounded set of journal
 references. Its pickup guidance is conservative when evidence is missing,
-stale, malformed, blocked, outside the recorded owner's attribution or
-from incomplete history. The caller can verify the referenced journal under
-its own tracker authorization. Treat evidence references as leads to verify
-and confirm custody before action. The installed owner text, tracker record,
+stale, malformed, blocked, carries a different owner label or comes from
+incomplete history. The checkpoint check establishes label consistency
+with the recorded owner. Authorship is unverified. When the state is
+`present`, confirm custody with the recorded owner before acting. A caller
+with tracker authorization can consult the referenced journal. The installed owner text, tracker record,
 and an independently authorized dispatch each carry their own scope.
 
 | Failure | Expected result |
