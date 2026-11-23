@@ -92,9 +92,9 @@ references. Its pickup guidance is conservative when evidence is missing,
 stale, malformed, blocked, carries a different owner label or comes from
 incomplete history. The checkpoint check establishes label consistency
 with the recorded owner. Authorship is unverified. When the state is
-`present`, confirm custody with the recorded owner before acting. A caller
-with tracker authorization can consult the referenced journal. A receiver
-with only the bearer learns the owner, state, any hold and whether a
+`present`, confirm custody with the recorded owner before taking over the
+item. A caller with tracker authorization can consult the referenced journal.
+A receiver with only the bearer learns the owner, state, any hold and whether a
 checkpoint exists. It cannot read the referenced journal or the recorded
 next step. The installed owner text, tracker record,
 and an independently authorized dispatch each carry their own scope.

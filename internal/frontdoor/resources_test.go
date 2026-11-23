@@ -233,8 +233,12 @@ esac
 		rules.SHA256 != commonrules.Digest([]byte(rules.Text)) || !strings.Contains(rules.Text, "uncommitted edit") {
 		t.Fatal("invalid operating rules")
 	}
-	if index := resourceContent(t, h, handoffURI, markdownMIME); !strings.Contains(index, handoffTemplate) {
+	index := resourceContent(t, h, handoffURI, markdownMIME)
+	if !strings.Contains(index, handoffTemplate) {
 		t.Fatal("handoff index does not identify the template")
+	}
+	if strings.Contains(index, "action-specific") {
+		t.Fatal("handoff index contains action-specific authority guidance")
 	}
 	t.Run("successful opwork uses stdout despite stderr", func(t *testing.T) {
 		handoff := resourceContent(t, h, handoffPrefix+"528", jsonMIME)

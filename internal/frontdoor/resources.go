@@ -38,7 +38,7 @@ var catalogText string
 //go:embed operating-rules.md
 var rulesText string
 
-const handoffIndex = "Read dev-env://handoff/v1/{item} with resources/read. Replace {item} with a positive OpenProject item ID. The service checks its configured tracker project. The handoff includes tracker state, recorded owner, journal references and pickup guidance. Verify custody and action-specific authority before acting."
+const handoffIndex = "Read dev-env://handoff/v1/{item} with resources/read. Replace {item} with a positive OpenProject item ID. The service checks its configured tracker project. The handoff includes tracker state, recorded owner, journal references and pickup guidance. Confirm custody with the recorded owner before taking over the item. The server and the operator enforce the caller's limits."
 
 var handoffOwnerPattern = regexp.MustCompile(`^agent \| worktree ([a-z0-9][a-z0-9-]{0,79}) \| branch agent/([a-z0-9][a-z0-9-]{0,79})$`)
 
