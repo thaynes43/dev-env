@@ -54,6 +54,10 @@ permissions apply. Read one bounded activity page using the check-in
 contract. A changing item lock or inconsistent metadata fails unavailable.
 The projection stays within the current item scope. It does not consult an old
 session, local pending files, provider homes, parent notes or the operator.
+The server configures its operator connection at startup and reads the
+projected operator credential per operator request. An empty or missing
+credential refuses that request locally. Tracker reads and packaged resources
+can serve during an operator credential outage.
 An offline `opwork checkpoint` reaches the durable source only when
 `flush` confirms it in the tracker. An existing `checkpoint-update` marker
 can identify a structured checkpoint and its sourcing journal.

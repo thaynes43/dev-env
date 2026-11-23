@@ -35,7 +35,9 @@ The operator token is sent only to the operator, as `Authorization: Bearer`.
 The tracker credential is passed to opwork by file path (`OPWORK_TOKEN_FILE`)
 and is not an argument. Neither file is logged. The process does not call the
 Kubernetes API and does not mint a token. A missing bearer file or tracker
-file stops it before it listens. A missing authority file does not.
+file stops it before it listens. The operator token is checked per operator
+request. If it is missing or empty, those requests fail locally while project
+tracker and packaged resource reads remain available.
 
 ## Tools
 
@@ -293,10 +295,11 @@ text, changed only by a PR he approves. This repository installs none.
 
 ## Limits
 
-Each tool call or resource read has one deadline of 90 seconds. The operator client and the
-opwork process share it, and a client disconnect cancels both. At most four tool calls or resource reads run at once. Excess calls return
-`busy, try again` as a tool error or resource RPC error before contacting
-any backend.
+Each tool call or resource read has one deadline of 90 seconds. The operator
+client and the opwork process share it, and a client disconnect cancels both.
+At most four tool calls or resource reads run at once. Excess calls return
+`busy, try again` as a tool error or resource RPC error before contacting any
+backend.
 
 ## What the cluster needs
 

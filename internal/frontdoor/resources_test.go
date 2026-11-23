@@ -208,3 +208,33 @@ esac
 		t.Fatalf("unexpected audit output: %s", &logs)
 	}
 }
+
+func TestResourceReadsWithEmptyOperatorToken(t *testing.T) {
+	dir := t.TempDir()
+	bearer := filepath.Join(dir, "bearer")
+	tracker := filepath.Join(dir, "tracker")
+	operator := filepath.Join(dir, "operator")
+	writeFile(t, bearer, testBearer)
+	writeFile(t, tracker, testTracker)
+	writeFile(t, operator, "")
+	h, op, err := newHandler(Config{
+		BearerFile: bearer, TrackerFile: tracker, OperatorTokenFile: operator,
+		APIURL: "https://127.0.0.1:1",
+	}, log.New(&bytes.Buffer{}, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(op.Close)
+	if resourceContent(t, h, rulesURI, jsonMIME) == "" {
+		t.Fatal("rules resource unavailable")
+	}
+	status := resourceResult[struct {
+		IsError bool
+		Content []struct{ Text string }
+	}](t, resourceRequest(t, h, testBearer, "tools/call", map[string]any{
+		"name": "session_status", "arguments": map[string]string{"name": "example-session"},
+	}))
+	if !status.IsError || len(status.Content) != 1 || !strings.Contains(status.Content[0].Text, "is empty") {
+		t.Fatal("missing operator token did not fail the operator request locally")
+	}
+}
