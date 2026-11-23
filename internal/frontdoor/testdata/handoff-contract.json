@@ -1,0 +1,16 @@
+{
+  "trackerBaseURL": "https://work.haynesnetwork.com",
+  "statuses": [
+    "Ungroomed", "Proposed", "Ready", "In progress", "In review", "Accepted", "Rejected",
+    "Closed", "Cancelled", "Blocked", "Needs answer", "Needs approval", "Paused", "Unknown"
+  ],
+  "checkpointStates": ["present", "absent", "malformed", "incomplete", "owner-unconfirmed", "blocked", "stale"],
+  "nextActions": [
+    "Keep the recorded hold and confirm its disposition with the owner.",
+    "Keep the recorded end state and use the item evidence for any authorized follow-up.",
+    "Keep the work paused until its current state and next action are verified.",
+    "A checkpoint carries the recorded owner's label. Its author is unverified. Confirm custody with the recorded owner before acting.",
+    "Confirm an accountable owner and a durable checkpoint before pickup.",
+    "Confirm custody and the next action with the recorded owner before pickup."
+  ]
+}

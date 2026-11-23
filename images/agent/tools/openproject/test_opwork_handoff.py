@@ -4,6 +4,8 @@ import json
 import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest import mock
 
 from test_opwork_groom import Down, FakeTracker, load
@@ -44,6 +46,34 @@ class HandoffProjection(unittest.TestCase):
         code, out, err = self.invoke(request)
         self.assertEqual((code, err), (0, ""))
         return json.loads(out)
+
+    def test_shared_handoff_contract(self):
+        # TestSharedHandoffContract in resources_test.go reads the same fixture.
+        root = Path(__file__).resolve().parents[4]
+        fixture = json.loads((root / "internal/frontdoor/testdata/handoff-contract.json").read_text(encoding="utf-8"))
+        self.assertEqual(opwork.BASE_URL, fixture["trackerBaseURL"])
+
+        self.item["_links"]["status"]["title"] = PRIVATE
+        statuses = opwork.HANDOFF_STATES | {self.document()["workState"]["status"]}
+        self.assertEqual(statuses, set(fixture["statuses"]))
+
+        now = datetime(2026, 11, 23, tzinfo=timezone.utc)
+        histories = (
+            ([], True),
+            ([checkpoint()], True),
+            ([checkpoint(stale=True)], True),
+            ([checkpoint(ack=False)], True),
+            ([checkpoint(author="previous-worker")], True),
+            ([checkpoint(check_after="tomorrow")], True),
+            ([], False),
+        )
+        states = {opwork.handoff_checkpoint(acts, complete, OWNER, now)[0]
+                  for acts, complete in histories}
+        self.assertEqual(states, set(fixture["checkpointStates"]))
+
+        actions = {opwork.handoff_next_action(status, owner, state)
+                   for status in statuses for owner in (OWNER, "Unknown") for state in states}
+        self.assertEqual(actions, set(fixture["nextActions"]))
 
     def test_project_fence_and_metadata_only_projection(self):
         self.fake.acts[528] = [checkpoint()]

@@ -178,6 +178,8 @@ func resourceText(uri, mimeType, text string) map[string]any {
 	return map[string]any{"contents": []map[string]string{{"uri": uri, "mimeType": mimeType, "text": text}}}
 }
 
+const handoffTrackerBaseURL = "https://work.haynesnetwork.com"
+
 // readHandoff uses opwork's scoped, metadata-only JSON mode. Its fixed exit
 // codes distinguish project/auth refusal, absence, and source failure.
 func (h *handler) readHandoff(ctx context.Context, uri string, item int64, bearer string) (any, *rpcError) {
@@ -197,13 +199,30 @@ func (h *handler) readHandoff(ctx context.Context, uri string, item int64, beare
 		return nil, unavailable
 	}
 	// childEnv supplies no OPWORK_BASE_URL, so opwork uses its public default.
-	url := "https://work.haynesnetwork.com/projects/" + h.work.project + "/work_packages/" + id
+	url := handoffTrackerBaseURL + "/projects/" + h.work.project + "/work_packages/" + id
 	data := validatedHandoff(text, h.work.project, item, url, bearer)
 	if data == nil {
 		return nil, unavailable
 	}
 	return resourceText(uri, jsonMIME, string(data)), nil
 }
+
+// These sets mirror the metadata-only projection in opwork.py.
+var (
+	handoffCheckpointStates = []string{"present", "absent", "malformed", "incomplete", "owner-unconfirmed", "blocked", "stale"}
+	handoffStatuses         = []string{
+		"Ungroomed", "Proposed", "Ready", "In progress", "In review", "Accepted", "Rejected",
+		"Closed", "Cancelled", "Blocked", "Needs answer", "Needs approval", "Paused", "Unknown",
+	}
+	handoffNextActions = []string{
+		"Keep the recorded hold and confirm its disposition with the owner.",
+		"Keep the recorded end state and use the item evidence for any authorized follow-up.",
+		"Keep the work paused until its current state and next action are verified.",
+		"A checkpoint carries the recorded owner's label. Its author is unverified. Confirm custody with the recorded owner before acting.",
+		"Confirm an accountable owner and a durable checkpoint before pickup.",
+		"Confirm custody and the next action with the recorded owner before pickup.",
+	}
+)
 
 func validatedHandoff(text, project string, item int64, url, bearer string) []byte {
 	var envelope struct {
@@ -248,17 +267,9 @@ func validatedHandoff(text, project string, item int64, url, bearer string) []by
 			return nil
 		}
 	}
-	// These sets mirror the metadata-only projection in opwork.py.
-	if !slices.Contains([]string{"present", "absent", "malformed", "incomplete", "owner-unconfirmed", "blocked", "stale"}, envelope.Source.Checkpoint) ||
-		!slices.Contains([]string{"Ungroomed", "Proposed", "Ready", "In progress", "In review", "Accepted", "Rejected", "Closed", "Cancelled", "Blocked", "Needs answer", "Needs approval", "Paused", "Unknown"}, envelope.WorkState.Status) ||
-		!slices.Contains([]string{
-			"Keep the recorded hold and confirm its disposition with the owner.",
-			"Keep the recorded end state and use the item evidence for any authorized follow-up.",
-			"Keep the work paused until its current state and next action are verified.",
-			"A checkpoint carries the recorded owner's label. Its author is unverified. Confirm custody with the recorded owner before acting.",
-			"Confirm an accountable owner and a durable checkpoint before pickup.",
-			"Confirm custody and the next action with the recorded owner before pickup.",
-		}, envelope.NextAction) {
+	if !slices.Contains(handoffCheckpointStates, envelope.Source.Checkpoint) ||
+		!slices.Contains(handoffStatuses, envelope.WorkState.Status) ||
+		!slices.Contains(handoffNextActions, envelope.NextAction) {
 		return nil
 	}
 	wantHold := "false"

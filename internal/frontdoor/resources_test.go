@@ -285,6 +285,38 @@ esac
 	}
 }
 
+func TestSharedHandoffContract(t *testing.T) {
+	// test_opwork_handoff.py checks the Python projection against this same fixture.
+	data, err := os.ReadFile("testdata/handoff-contract.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		TrackerBaseURL   string
+		Statuses         []string
+		CheckpointStates []string
+		NextActions      []string
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if handoffTrackerBaseURL != fixture.TrackerBaseURL {
+		t.Errorf("tracker base URL = %q, want %q", handoffTrackerBaseURL, fixture.TrackerBaseURL)
+	}
+	for _, set := range []struct {
+		name      string
+		got, want []string
+	}{
+		{"status", handoffStatuses, fixture.Statuses},
+		{"checkpoint state", handoffCheckpointStates, fixture.CheckpointStates},
+		{"next action", handoffNextActions, fixture.NextActions},
+	} {
+		if !slices.Equal(slices.Sorted(slices.Values(set.got)), slices.Sorted(slices.Values(set.want))) {
+			t.Errorf("%s values = %q, want %q", set.name, set.got, set.want)
+		}
+	}
+}
+
 func TestHandoffProjectionValidation(t *testing.T) {
 	const url = "https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/528"
 	for _, test := range []struct {
