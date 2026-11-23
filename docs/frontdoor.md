@@ -34,10 +34,9 @@ before it is returned.
 The operator token is sent only to the operator, as `Authorization: Bearer`.
 The tracker credential is passed to opwork by file path (`OPWORK_TOKEN_FILE`)
 and is not an argument. Neither file is logged. The process does not call the
-Kubernetes API and does not mint a token. A missing bearer file or tracker
-file stops it before it listens. The operator token is checked per operator
-request. If it is missing or empty, those requests fail locally while project
-tracker and packaged resource reads remain available.
+Kubernetes API and does not mint a token. The bearer, tracker and operator
+credential files must be readable and nonempty before the process listens.
+A missing authority file does not prevent startup.
 
 ## Tools
 

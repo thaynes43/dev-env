@@ -29,7 +29,8 @@ stand for a real in-scope target. Run a write only for approved work.
 - **Operator** means the front door presents the projected
   `dev-env-system/dev-env-meatball` identity, bound by CallerPolicy
   `dev-env-system/meatball`. The operator and route must be reachable and
-  enabled. Session and parent access is caller-owned. HTTP 401, 403 or 404
+  enabled for operator calls. The server requires its operator credential
+  at startup. Session and parent access is caller-owned. HTTP 401, 403 or 404
   are presented as `refused:` by session and parent tools. Transport failure,
   limits and conflict report their own diagnostics. Parent tools require
   `--enable-parent-notes` on the operator.

@@ -54,10 +54,9 @@ permissions apply. Read one bounded activity page using the check-in
 contract. A changing item lock or inconsistent metadata fails unavailable.
 The projection stays within the current item scope. It does not consult an old
 session, local pending files, provider homes, parent notes or the operator.
-The server configures its operator connection at startup and reads the
-projected operator credential per operator request. An empty or missing
-credential refuses that request locally. Tracker reads and packaged resources
-can serve during an operator credential outage.
+The server requires the operator credential at startup and rereads it for
+each operator request. A loopback resource test uses a non-secret placeholder
+operator token, a closed local API port and a stub opwork.
 An offline `opwork checkpoint` reaches the durable source only when
 `flush` confirms it in the tracker. An existing `checkpoint-update` marker
 can identify a structured checkpoint and its sourcing journal.
@@ -170,6 +169,8 @@ review decision and fixed reasons. Snapshot assertions are evidence inputs,
 and any later authorized action requires fresh, independently verified proof.
 
 ## Access changes proposed, not made
+
+- Serve resources during an operator credential outage.
 
 - Dot usage needs an exact `GET /v1/provider-allowances` admission for
   CallerPolicy `dev-env-system/meatball` and the projected

@@ -18,9 +18,8 @@ type Operator struct {
 
 // OpenOperator prepares a client for apiURL using the bearer token in tokenFile.
 // An empty apiURL or tokenFile uses the in-cluster defaults. The token is read
-// before each request so a projected rotation is picked up. A missing or
-// empty token fails that request locally and leaves tracker-only operations
-// available. The token is not logged.
+// once here so a missing file fails before the process serves, and again on
+// each request so a projected rotation is picked up. The token is not logged.
 func OpenOperator(apiURL, tokenFile, caFile string) (*Operator, error) {
 	if apiURL == "" {
 		apiURL = DefaultAPIURL
@@ -31,6 +30,10 @@ func OpenOperator(apiURL, tokenFile, caFile string) (*Operator, error) {
 	a := &app{env: DefaultEnv()}
 	c, err := a.connect(context.Background(), connOpts{apiURL: apiURL, tokenFile: tokenFile, caFile: caFile})
 	if err != nil {
+		a.close()
+		return nil, err
+	}
+	if _, err := c.token.Token(context.Background()); err != nil {
 		a.close()
 		return nil, err
 	}

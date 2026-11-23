@@ -127,8 +127,8 @@ const handoffFixture = `{"schema":"dev-env.work-item-handoff","version":1,"owner
 
 func TestReadResources(t *testing.T) {
 	var logs bytes.Buffer
-	h := newResourceTestHandler(t, &logs)
-	stub := filepath.Join(t.TempDir(), "opwork")
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "opwork")
 	writeFile(t, stub, fmt.Sprintf(`#!/bin/sh
 [ "$1" = "--project=haynes-engineering" ] && [ "$2" = "show" ] && [ "$4" = "--handoff-json" ] && [ "$#" -eq 4 ] || exit 77
 [ -z "${KUBERNETES_SERVICE_HOST-}${KUBECONFIG-}" ] || exit 77
@@ -144,7 +144,20 @@ esac
 	if err := os.Chmod(stub, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	h.work = opwork{path: stub, project: defaultProject}
+	bearer := filepath.Join(dir, "bearer")
+	tracker := filepath.Join(dir, "tracker")
+	operator := filepath.Join(dir, "operator")
+	writeFile(t, bearer, testBearer)
+	writeFile(t, tracker, testTracker)
+	writeFile(t, operator, "fixture-operator-token")
+	h, op, err := newHandler(Config{
+		BearerFile: bearer, TrackerFile: tracker, OperatorTokenFile: operator,
+		APIURL: "https://127.0.0.1:1", Opwork: stub,
+	}, log.New(&logs, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(op.Close)
 
 	t.Setenv("KUBERNETES_SERVICE_HOST", "should-not-reach-child")
 	t.Setenv("KUBECONFIG", "should-not-reach-child")
@@ -206,35 +219,5 @@ esac
 		!strings.Contains(logs.String(), "rpc resources/read handoff refused") ||
 		!strings.Contains(logs.String(), "rpc resources/read handoff unavailable") {
 		t.Fatalf("unexpected audit output: %s", &logs)
-	}
-}
-
-func TestResourceReadsWithEmptyOperatorToken(t *testing.T) {
-	dir := t.TempDir()
-	bearer := filepath.Join(dir, "bearer")
-	tracker := filepath.Join(dir, "tracker")
-	operator := filepath.Join(dir, "operator")
-	writeFile(t, bearer, testBearer)
-	writeFile(t, tracker, testTracker)
-	writeFile(t, operator, "")
-	h, op, err := newHandler(Config{
-		BearerFile: bearer, TrackerFile: tracker, OperatorTokenFile: operator,
-		APIURL: "https://127.0.0.1:1",
-	}, log.New(&bytes.Buffer{}, "", 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(op.Close)
-	if resourceContent(t, h, rulesURI, jsonMIME) == "" {
-		t.Fatal("rules resource unavailable")
-	}
-	status := resourceResult[struct {
-		IsError bool
-		Content []struct{ Text string }
-	}](t, resourceRequest(t, h, testBearer, "tools/call", map[string]any{
-		"name": "session_status", "arguments": map[string]string{"name": "example-session"},
-	}))
-	if !status.IsError || len(status.Content) != 1 || !strings.Contains(status.Content[0].Text, "is empty") {
-		t.Fatal("missing operator token did not fail the operator request locally")
 	}
 }
