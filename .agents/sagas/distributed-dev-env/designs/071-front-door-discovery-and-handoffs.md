@@ -147,6 +147,24 @@ request as a removal receipt. No repeated or destructive action follows an
 uncertain result. The classifier only proposes review. Unknown input keeps
 custody, and the inventory is read-only.
 
+For a dry run, build the offline classifier and give it a sanitized snapshot:
+
+```sh
+GOMAXPROCS=2 nice -n 19 go build -p 2 -o bin/session-retire-dry-run ./cmd/session-retire-dry-run
+bin/session-retire-dry-run < /private/sanitized-records.json
+```
+
+The input is a JSON array of records with `session` and `phase`. Record
+`execution` as `live` or `stopped`, `hold` as `present` or `clear`, and
+`reap` as `pending` or `clear` only when confirmed. For `retirement`,
+`checkpoint`, `branchAndHead`, `unpushedCommits`, `uncommittedChanges`,
+and `retention`, use `verified` only for reviewed evidence for that exact
+session and stopped workspace. Use `acknowledged` or `not-required`
+for `successor` only with the matching receipt or recorded decision.
+Leave unknown fields absent. The output provides the class, keep or
+review decision and fixed reasons. Snapshot assertions are evidence inputs,
+and any later authorized action requires fresh, independently verified proof.
+
 ## Access changes proposed, not made
 
 - Dot usage needs an exact `GET /v1/provider-allowances` admission for

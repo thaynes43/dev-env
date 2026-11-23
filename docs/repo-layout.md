@@ -46,6 +46,7 @@ cmd/agentd/              the in-pod supervisor: `run`, `home-verify` (the origin
 cmd/dev-env-allowance-handoff/  explicitly invoked one-time collector fingerprint handoff preparation and guarded apply; the elected operator runs the same fenced apply from `--allowance-handoff-file` (default off, in-slot backup)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); commands in internal/agentrun, fixed internal allowance helper in internal/usagecollector
 cmd/home-retention-dry-run/  standalone bounded offline HOME policy report (DESIGN-044); no collector, runtime integration or deletion
+cmd/session-retire-dry-run/  offline session retirement classifier for sanitized read-only records (DESIGN-071)
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
 internal/testsock/       ShortDir: a short /tmp directory for a test's Unix socket (108-byte sun_path; t.TempDir follows GOTMPDIR in a session pod); test support, imported only from _test.go files (OP506)
