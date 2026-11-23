@@ -210,8 +210,8 @@ Manifest references below were read at haynes-ops commit
 
 - Serve resources during an operator credential outage.
 - Verified checkpoint provenance needs a per-session tracker identity or a signed marker.
-- A handoff v2 could return the checkpoint’s next action and evidence only
-  for state `present`. Bound and scrub both fields and mark them as
+- A handoff v2 could return the checkpoint’s `next_action` and `evidence`
+  only for state `present`. Bound and scrub both fields and mark them as
   unverified tracker text.
 - Dot usage needs an exact `GET /v1/provider-allowances` admission for the
   identity bound by `CallerPolicy/dev-env-system/meatball.spec.serviceAccount`
@@ -229,9 +229,11 @@ Manifest references below were read at haynes-ops commit
   `spec.template.spec.containers[name=frontdoor].volumeMounts` or a scoped
   operator route. This slice publishes the reviewed packaged text.
 - The same Deployment’s `spec.template.spec.serviceAccountName` selects
-  `ServiceAccount/dev-env-system/dev-env-meatball`. Its bearer and tracker
-  Secrets are named in the corresponding ExternalSecrets’
-  `spec.target.name` fields. The `IngressRoute/dev/dev-env-frontdoor`
+  `ServiceAccount/dev-env-system/dev-env-meatball`. The bearer and tracker
+  Secret names come from `spec.target.name` on
+  `ExternalSecret/dev-env-system/dev-env-frontdoor-token` and
+  `ExternalSecret/dev-env-system/dev-env-frontdoor-openproject`.
+  The `IngressRoute/dev/dev-env-frontdoor`
   binds `/mcp` in `spec.routes[].match`. The
   `CiliumNetworkPolicy/dev-env-system/dev-env-frontdoor` and
   `CiliumNetworkPolicy/frontend/openproject-frontdoor-api` constrain
