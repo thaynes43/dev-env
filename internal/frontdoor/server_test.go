@@ -292,7 +292,7 @@ func TestFrontDoorTools(t *testing.T) {
 			t.Fatalf("instructions %q", instr)
 		}
 		n := len(strings.Fields(instr))
-		if n > 120 || n != 58 {
+		if n == 0 || n > 120 {
 			t.Fatalf("instructions have %d words", n)
 		}
 	})

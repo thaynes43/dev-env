@@ -120,6 +120,16 @@ class Fail(Exception):
         self.code = code
 
 
+class TrackerGetFail(Fail):
+    def __init__(self, path, status, message):
+        self.path, self.status = path.split("?")[0], status
+        super().__init__("GET %s -> HTTP %s %s" % (self.path, status, message))
+
+
+class ProjectScopeFail(Fail):
+    pass
+
+
 class GuardRefusal(Fail):
     """The existing guard's decision and read snapshot; never inferred from message text."""
     def __init__(self, message, reason, wp):
@@ -263,7 +273,7 @@ class Tracker:
     def get(self, path):
         code, data = self.call("GET", path)
         if code >= 400:
-            raise Fail("GET %s -> HTTP %s %s" % (path.split("?")[0], code, data.get("message", "")))
+            raise TrackerGetFail(path, code, data.get("message", ""))
         return data
 
     def names(self, kind):  # name -> id for statuses / types, resolved live
@@ -309,7 +319,7 @@ class Tracker:
         if isinstance(link, dict) and isinstance(link.get("href"), str):
             href = link["href"]
         if href not in self.project_hrefs():
-            raise Fail("REFUSED: #%s is not in project %s. Nothing was returned or written. An item of another project needs --project." % (wp_id, self.project), 3)
+            raise ProjectScopeFail("REFUSED: #%s is not in project %s. Nothing was returned or written. An item of another project needs --project." % (wp_id, self.project), 3)
         return item
 
     def listing(self, filters, page=1, size=20):
@@ -501,6 +511,32 @@ def activity_page(t, wp_id):
     return rows, total <= len(rows)
 
 
+def latest_checkpoint(acts):
+    candidates = [x for x in acts if CHECKIN_MARKER in text_of(x.get("comment"))]
+    if not candidates:
+        return {}, None, None, "absent"
+    try:
+        if any(not utc_time(x.get("createdAt")) or type(x.get("id")) is not int for x in candidates):
+            raise ValueError("invalid activity identity")
+        act = max(candidates, key=lambda x: (utc_time(x["createdAt"]), x["id"]))
+        comment = text_of(act.get("comment"))
+        links = act.get("_links")
+        user = links.get("user") if isinstance(links, dict) else None
+        actor = re.fullmatch(r"/api/v3/users/([1-9][0-9]*)", user.get("href", "")) if isinstance(user, dict) and isinstance(user.get("href"), str) else None
+        author = re.match(r"^\*\*\[([^]\n]+)\]\*\* Structured checkpoint\n\n", comment)
+        if not author or not re.search(r"\(opwork:note=[0-9a-f]{12}\)", comment) or not actor:
+            raise ValueError("invalid envelope")
+        meta = json.loads(comment.split(CHECKIN_MARKER, 1)[1].split("\n", 1)[0])
+        if not isinstance(meta, dict) or any(not isinstance(meta.get(k), str) or not meta[k].strip() for k in ("next_action", "check_after", "evidence")) or not utc_time(meta["check_after"]):
+            raise ValueError("invalid required fields")
+        if any(meta.get(k) is not None and (not isinstance(meta[k], str) or not meta[k].strip()) for k in ("last_verified", "handoff")) or (meta.get("last_verified") and not utc_time(meta["last_verified"])) or any(meta.get(k) is not None and not isinstance(meta[k], bool) for k in ("ack", "stale", "blocked", "deployed")):
+            raise ValueError("invalid optional fields")
+        source = {"activity_id": act["id"], "created_at": act["createdAt"], "author": user.get("title") or "user#%s" % actor.group(1)}
+        return meta, source, author.group(1), "present"
+    except (ValueError, TypeError):
+        return {}, None, None, "malformed"
+
+
 def cmd_checkins(t, a, session):
     filters = [{"status": {"operator": "=", "values": [str(t.resolve("statuses", x)) for x in a.status.split(",")]}}] if a.status else [{"status": {"operator": "o", "values": []}}]
     data = t.listing(filters, a.page, a.limit)
@@ -515,28 +551,7 @@ def cmd_checkins(t, a, session):
         if a.owner and a.owner.lower() not in owner.lower():
             continue
         acts, complete = activity_page(t, w["id"])
-        candidates = [x for x in acts if CHECKIN_MARKER in text_of(x.get("comment"))]
-        candidates.sort(key=lambda x: (utc_time(x.get("createdAt")) or datetime.min.replace(tzinfo=timezone.utc), x.get("id") if isinstance(x.get("id"), int) and not isinstance(x.get("id"), bool) else -1), reverse=True)
-        meta, source, malformed = {}, None, False
-        if candidates:
-            act = candidates[0]
-            try:
-                if any(not utc_time(x.get("createdAt")) or not isinstance(x.get("id"), int) or isinstance(x.get("id"), bool) for x in candidates):
-                    raise ValueError("invalid activity timestamp")
-                comment = text_of(act.get("comment"))
-                links = act.get("_links")
-                user = links.get("user") if isinstance(links, dict) else None
-                actor = re.fullmatch(r"/api/v3/users/([1-9][0-9]*)", user.get("href", "")) if isinstance(user, dict) and isinstance(user.get("href"), str) else None
-                if not re.match(r"^\*\*\[[^]\n]+\]\*\* Structured checkpoint\n\n", comment) or not re.search(r"\(opwork:note=[0-9a-f]{12}\)", comment) or not utc_time(act.get("createdAt")) or not actor:
-                    raise ValueError("invalid envelope")
-                meta = json.loads(comment.split(CHECKIN_MARKER, 1)[1].split("\n", 1)[0])
-                if not isinstance(meta, dict) or any(not isinstance(meta.get(k), str) or not meta[k].strip() for k in ("next_action", "check_after", "evidence")) or not utc_time(meta["check_after"]):
-                    raise ValueError("invalid required fields")
-                if any(meta.get(k) is not None and (not isinstance(meta[k], str) or not meta[k].strip()) for k in ("last_verified", "handoff")) or (meta.get("last_verified") and not utc_time(meta["last_verified"])) or any(meta.get(k) is not None and not isinstance(meta[k], bool) for k in ("ack", "stale", "blocked", "deployed")):
-                    raise ValueError("invalid optional fields")
-                source = {"activity_id": act.get("id"), "created_at": act.get("createdAt"), "author": user.get("title") or "user#%s" % actor.group(1)}
-            except (ValueError, TypeError):
-                meta, malformed = {}, True
+        meta, source, _, checkpoint = latest_checkpoint(acts)
         if not complete:
             meta = {}  # an unseen newer comment may supersede every visible value
         check = utc_time(meta.get("check_after"))
@@ -552,7 +567,7 @@ def cmd_checkins(t, a, session):
                        "next_action": meta.get("next_action") or "Unknown", "check_after": meta.get("check_after") if check else "Unknown",
                        "evidence": meta.get("evidence") or "Unknown", "last_verified": meta.get("last_verified") or "Unknown", "handoff": meta.get("handoff") or "Unknown",
                        "provenance": text_of(w.get(PROVENANCE)) or "Unknown", "comment_source": source,
-                       "metadata": "unknown" if not complete else ("malformed" if malformed else ("present" if candidates else "absent")), "history_complete": complete})
+                       "metadata": checkpoint if complete else "unknown", "history_complete": complete})
     return json.dumps({"items": result, "page": a.page, "page_size": a.limit, "total_before_owner_filter": data.get("total"), "has_more": a.page * a.limit < total, "owner_filter_scope": "selected page", "owner_match_total": "Unknown"}, sort_keys=True)
 
 
@@ -608,7 +623,101 @@ def scan_limited():
         SCAN_MAX_PAGES, SCAN_PAGE_SIZE, SCAN_MAX_ROWS)
 
 
+HANDOFF_OWNER = re.compile(r"agent \| worktree ([a-z0-9][a-z0-9-]{0,79}) \| branch agent/\1", re.ASCII)
+HANDOFF_PROJECT = re.compile(r"[a-z0-9][a-z0-9-]{0,99}", re.ASCII)
+HANDOFF_STATES = {"Ungroomed", "Proposed", "Ready", "In progress", "In review",
+                  "Accepted", "Rejected", "Closed", "Cancelled", "Blocked", *HOLDS}
+
+
+def handoff_snapshot(w, item):
+    if type(w.get("id")) is not int or w["id"] != item or type(w.get("lockVersion")) is not int or w["lockVersion"] < 0:
+        raise ValueError("invalid work-item identity")
+    updated = utc_time(w.get("updatedAt"))
+    if updated is None:
+        raise ValueError("missing work-item update time")
+    return w["lockVersion"], updated, text_of(w.get(OWNER)), w["_links"]["status"]["title"]
+
+
+def handoff_checkpoint(acts, complete, owner, now):
+    if not complete:
+        return "incomplete", None
+    meta, source, author, observation = latest_checkpoint(acts)
+    if source is None:
+        return observation, None
+    created = utc_time(source["created_at"])
+    if created > now or source["activity_id"] <= 0:
+        return "malformed", None
+    ref = {"kind": "structured-checkpoint", "activityId": source["activity_id"], "createdAt": created.isoformat()}
+    if owner == "Unknown" or author != owner:
+        return "owner-unconfirmed", ref
+    if meta.get("stale") is True or utc_time(meta["check_after"]) <= now:
+        return "stale", ref
+    if meta.get("blocked") is True or meta.get("ack") is False:
+        return "blocked", ref
+    return "present", ref
+
+
+def handoff_next_action(status, owner, checkpoint):
+    if status in HOLDS:
+        return "Keep the recorded hold and confirm its disposition with the owner."
+    if status in {"Accepted", "Rejected", "Closed", "Cancelled"}:
+        return "Keep the recorded end state and use the item evidence for any authorized follow-up."
+    if status in {"Unknown", "Blocked"} or checkpoint == "blocked":
+        return "Keep the work paused until its current state and next action are verified."
+    if checkpoint == "present":
+        return "Confirm custody and consult the referenced checkpoint for the recorded next action."
+    if owner == "Unknown":
+        return "Confirm an accountable owner and a durable checkpoint before pickup."
+    return "Confirm custody and the next action with the recorded owner before pickup."
+
+
+def show_handoff(t, a):
+    if a.id < 1 or a.history or a.relations or a.full:
+        raise Fail("handoff requires a positive item ID without history, relations or full flags")
+    if not HANDOFF_PROJECT.fullmatch(t.project):
+        raise Fail("handoff tracker unavailable", 5)
+    try:
+        before = handoff_snapshot(t.resolve_item(a.id), a.id)
+        acts, complete = activity_page(t, a.id)
+        if before != handoff_snapshot(t.resolve_item(a.id), a.id):
+            raise ValueError("item changed")
+        lock, updated, owner, state = before
+        now = datetime.now(timezone.utc)
+        owner = owner if HANDOFF_OWNER.fullmatch(owner) else "Unknown"
+        state = state if state in HANDOFF_STATES else "Unknown"
+        checkpoint, ref = handoff_checkpoint(acts, complete, owner, now)
+        evidence = [ref] if ref else []
+        visible = [(created, act["id"]) for act in acts
+                   if type(act.get("id")) is int and act["id"] > 0
+                   and (created := utc_time(act.get("createdAt"))) is not None and created <= now]
+        if visible:
+            created, journal = max(visible)
+            if not ref or ref["activityId"] != journal:
+                evidence.append({"kind": "visible-journal", "activityId": journal, "createdAt": created.isoformat()})
+        return json.dumps({
+            "schema": "dev-env.work-item-handoff", "version": 1, "owner": owner,
+            "source": {"system": "OpenProject", "url": wp_url(a.id), "lockVersion": lock,
+                       "updatedAt": updated.isoformat(), "checkpoint": checkpoint},
+            "targetScope": {"project": t.project, "item": a.id},
+            "workState": {"status": state, "hold": None if state == "Unknown" else state in HOLDS},
+            "evidence": evidence, "nextAction": handoff_next_action(state, owner, checkpoint),
+            "capturedAt": now.isoformat(),
+        }, sort_keys=True)
+    except ProjectScopeFail:
+        raise Fail("handoff read refused", 3) from None
+    except TrackerGetFail as failure:
+        if failure.status in (401, 403):
+            raise Fail("handoff read refused", 3) from None
+        if failure.status == 404 and failure.path == "/api/v3/work_packages/%d" % a.id:
+            raise Fail("resource not found", 4) from None
+        raise Fail("handoff tracker unavailable", 5) from None
+    except (Fail, AttributeError, KeyError, TypeError, ValueError):
+        raise Fail("handoff tracker unavailable", 5) from None
+
+
 def cmd_show(t, a, session):
+    if a.handoff_json:
+        return show_handoff(t, a)
     w = t.resolve_item(a.id)
     out = [line(w), "  source-key: %s" % text_of(w.get(SOURCE_KEY)), "  repos: %s" % text_of(w.get(REPOS)),
            "  acceptance: %s" % text_of(w.get(ACCEPT)).replace("\n", "\n    "), "  constraints: %s" % text_of(w.get(CONSTRAINTS)).replace("\n", "\n    "),
@@ -1153,7 +1262,9 @@ def build_parser():
         (("--all",), {"action": "store_true", "help": "include closed"}), (("--page",), {"type": int, "default": 1}), (("--limit",), {"type": int, "default": 20}), help="search work items")
     add("checkins", cmd_checkins, (("--owner",), {}), (("--status",), {}), (("-o", "--output"), {"choices": ["json"], "required": True}), (("--page",), {"type": int, "default": 1}), (("--limit",), {"type": int, "default": 100}), help="bounded check-in view; owner filter applies to selected page, use has_more for global continuation")
     add("checkpoint-update", cmd_checkpoint_update, wp, (("--next-action",), {"required": True}), (("--check-after",), {"required": True}), (("--evidence",), {"required": True}), (("--last-verified",), {}), (("--handoff",), {}), (("--ack",), {"action": "store_true", "default": None}), (("--missing-ack",), {"dest": "ack", "action": "store_false"}), (("--stale",), {"action": "store_true", "default": None}), (("--blocked",), {"action": "store_true", "default": None}), (("--deployed",), {"action": "store_true", "default": None}), help="post attributed structured checkpoint")
-    add("show", cmd_show, wp, (("--history",), {"action": "store_true"}), (("--relations",), {"action": "store_true"}), (("--full",), {"action": "store_true", "help": "no truncation of history text"}), help="read one item (read-only)")
+    add("show", cmd_show, wp, (("--history",), {"action": "store_true"}), (("--relations",), {"action": "store_true"}),
+        (("--full",), {"action": "store_true", "help": "no truncation of history text"}),
+        (("--handoff-json",), {"action": "store_true", "help": "bounded versioned handoff projection"}), help="read one item (read-only)")
     add("groom", cmd_groom, wp, (("--description",), {"help": "scope file path, or - for stdin"}), (("--acceptance",), {"help": "acceptance file path, or - for stdin"}),
         (("--constraints",), {"help": "constraints file path, or - for stdin"}), lock, help="edit scope, acceptance and constraints, then read the item back")
     add("order", cmd_order, wp, (("--priority",), {"required": True, "help": "priority name, for example High"}), lock, help="set what goes next, then read the item back")
