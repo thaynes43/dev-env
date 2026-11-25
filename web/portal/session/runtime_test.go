@@ -204,7 +204,7 @@ func TestURLConstructorsRejectEmptyHostAndAmbiguousConfiguration(t *testing.T) {
 	}
 }
 
-func TestFixedLandingAndForgedReturnURLOrHost(t *testing.T) {
+func TestDefaultLandingAndForgedLoginParameterOrHost(t *testing.T) {
 	f := setupAuth(t)
 	f.begin(t)
 	w := httptest.NewRecorder()
@@ -212,7 +212,7 @@ func TestFixedLandingAndForgedReturnURLOrHost(t *testing.T) {
 	if w.Code != 303 || w.Header().Get("Location") != SessionsPath {
 		t.Fatal("callback did not use fixed authorized landing")
 	}
-	for _, path := range []string{"/auth/login?return=https://evil.example/", "/auth/login?next=//evil.example/", LandingPath + "?return=https://evil.example/"} {
+	for _, path := range []string{"/auth/login?next=//evil.example/", LandingPath + "?return=https://evil.example/"} {
 		w := httptest.NewRecorder()
 		NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizeFunc(func(context.Context, portal.Principal, portal.Resource) error { return portal.ErrDenied }), Reader: portal.UnavailableReader{}, FreshFor: time.Minute, Now: func() time.Time { return f.now }}).ServeHTTP(w, f.request("GET", path, ""))
 		if w.Code == 200 || w.Code == 303 || w.Header().Get("Location") != "" {

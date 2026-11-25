@@ -52,7 +52,8 @@ the real key-set path using a fake transport and generated public keys.
   callback, fixed authorization/token/JWKS endpoints, `openid/profile`, explicit
   signing algorithms and positive session/transaction durations. The approved
   client/callback remain journal905; proposed session durations in DESIGN-029
-  are not selected runtime policy. No user-controlled destination or return URL.
+  are not selected runtime policy. The only browser-supplied redirect destination
+  is the allowlisted portal path used after a successful callback (OP945).
   The engine checks that code-client issuer/client/callback bindings match the
   verifier and validates the complete fixed authorization request before setting
   the browser transaction cookie or returning a redirect.
@@ -61,7 +62,8 @@ the real key-set path using a fake transport and generated public keys.
   destinations and oversized responses. Discovery must not silently introduce
   another host. Constructors and tests perform no real network call.
 - Pending login storage: server-side state, nonce and PKCE verifier bound to a
-  cryptographically random browser transaction handle; atomic, expiring,
+  cryptographically random browser transaction handle, with an optional
+  post-login redirect target in the same encrypted payload. Atomic, expiring,
   single-use consumption prevents replay, including across replicas. No default
   in-memory production substitute; an unconfigured store is unavailable.
 - Portal session storage: opaque random handle, issuer+immutable subject,

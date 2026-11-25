@@ -11,7 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+	"unicode"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/time/rate"
@@ -195,10 +197,42 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const loginReturnParam = "return"
+const maxLoginReturnBytes = 4096 // Fits a fully percent-encoded Ask cursor and the rest of the URL.
+
+func validLoginReturn(target string) bool {
+	if len(target) == 0 || len(target) > maxLoginReturnBytes || target[0] != '/' || strings.HasPrefix(target, "//") || strings.Contains(target, "#") {
+		return false
+	}
+	decoded, err := url.PathUnescape(target)
+	if err != nil || strings.ContainsRune(decoded, '\\') || strings.ContainsFunc(decoded, unicode.IsControl) {
+		return false
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.RawPath != "" {
+		return false
+	}
+	switch u.Path {
+	case AsksPath:
+		_, _, ok := asksQuery(u, http.MethodGet)
+		return ok
+	case SessionsPath:
+		return target == SessionsPath
+	default:
+		return false
+	}
+}
+
 func (e *Engine) begin(w http.ResponseWriter, r *http.Request) {
-	if r.URL.RawQuery != "" || r.URL.ForceQuery {
+	loginQuery, err := url.ParseQuery(r.URL.RawQuery)
+	returns := loginQuery[loginReturnParam]
+	if err != nil || r.URL.ForceQuery || (r.URL.RawQuery != "" && (len(loginQuery) != 1 || len(returns) == 0)) {
 		authFailure(w, portal.ErrDenied)
 		return
+	}
+	var returnTarget string
+	if len(returns) == 1 && validLoginReturn(returns[0]) {
+		returnTarget = returns[0]
 	}
 	// The process limiter bounds database traffic. Production also consumes the
 	// shared bucket before allocating a login, preserving burst 4/rate 1 per
@@ -253,7 +287,7 @@ func (e *Engine) begin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	expires := e.config.Now().Add(e.config.LoginTTL)
-	if err = e.config.Store.PutLogin(r.Context(), key, Login{State: state, Nonce: nonce, Verifier: verifier, ExpiresAt: expires}); err != nil {
+	if err = e.config.Store.PutLogin(r.Context(), key, Login{State: state, Nonce: nonce, Verifier: verifier, ExpiresAt: expires, ReturnTarget: returnTarget}); err != nil {
 		authFailure(w, normalize(err))
 		return
 	}
@@ -331,7 +365,11 @@ func (e *Engine) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	cookie(w, loginCookie, "", time.Unix(1, 0), -1)
 	cookie(w, sessionCookie, handle, record.ExpiresAt, maxAge)
-	w.Header().Set("Location", SessionsPath)
+	destination := SessionsPath
+	if validLoginReturn(login.ReturnTarget) {
+		destination = login.ReturnTarget
+	}
+	w.Header().Set("Location", destination)
 	w.WriteHeader(http.StatusSeeOther)
 }
 

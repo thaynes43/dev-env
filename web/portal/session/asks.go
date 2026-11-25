@@ -327,16 +327,16 @@ func (s *AsksSource) answer(ctx context.Context, id string, request apiv1.AskAns
 
 // Only these finite, validated GET queries reach the operator. POSTs carry
 // their target in the CSRF-protected form and never accept a query.
-func asksQuery(r *http.Request) (id, cursor string, ok bool) {
-	if r.URL.ForceQuery {
+func asksQuery(u *url.URL, method string) (id, cursor string, ok bool) {
+	if u.ForceQuery {
 		return "", "", false
 	}
-	q, err := url.ParseQuery(r.URL.RawQuery)
+	q, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
 		return "", "", false
 	}
-	if r.Method == http.MethodPost {
-		return "", "", r.URL.RawQuery == ""
+	if method == http.MethodPost {
+		return "", "", u.RawQuery == ""
 	}
 	for key, values := range q {
 		if len(values) != 1 {
@@ -365,7 +365,7 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	ctx, cancel := context.WithTimeout(r.Context(), 19*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
-	selectedID, cursor, queryOK := asksQuery(r)
+	selectedID, cursor, queryOK := asksQuery(r.URL, r.Method)
 	if r.URL.RawPath != "" || !queryOK || c.Now == nil || (r.Method != http.MethodGet && r.Method != http.MethodPost) || (r.Method == http.MethodGet && r.URL.Path != AsksPath) || (r.Method == http.MethodPost && r.URL.Path != AsksPath+"/answer") {
 		authFailure(w, portal.ErrDenied)
 		return
@@ -374,7 +374,8 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	if err != nil {
 		if r.Method == http.MethodGet && errors.Is(err, portal.ErrDenied) {
 			if _, authErr := c.Session.Authenticate(r); errors.Is(authErr, portal.ErrDenied) {
-				w.Header().Set("Location", "/auth/login")
+				q := url.Values{loginReturnParam: {r.URL.RequestURI()}}
+				w.Header().Set("Location", "/auth/login?"+q.Encode())
 				w.WriteHeader(http.StatusSeeOther)
 				return
 			}
