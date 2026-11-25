@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -900,6 +901,90 @@ func TestAsksSignInReturnsToSelectedAsk(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAsksAnswerAfterPortalSessionEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		fromExpiry time.Duration
+		omitCookie bool
+		signIn     bool
+		wantStatus int
+		wantSends  int
+	}{
+		{name: "expired-session-cookie", fromExpiry: time.Second, wantStatus: http.StatusForbidden},
+		{name: "no-session-cookie", fromExpiry: time.Second, omitCookie: true, wantStatus: http.StatusForbidden},
+		{name: "expired-then-signed-in", fromExpiry: time.Second, signIn: true, wantStatus: http.StatusForbidden},
+		{name: "within-session-lifetime", fromExpiry: -time.Second, wantStatus: http.StatusSeeOther, wantSends: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c, operator := asksSetup(t)
+			f.accessTokenTTL = 5 * time.Minute
+			f.e.config.IdleTTL = time.Hour
+			f.e.config.AbsoluteTTL = time.Hour
+			expires := f.now.Add(f.accessTokenTTL)
+			f.login(t)
+			if !f.session.Expires.Equal(expires) {
+				t.Fatalf("session expires at %v, want signed access token expiry %v", f.session.Expires, expires)
+			}
+			askID := operator.items[0].ID
+			target := AsksPath + "?ask=" + askID
+			oldForm := loadAskAnswerForm(t, f, c, target, askID)
+			f.now = expires.Add(tc.fromExpiry)
+			if tc.omitCookie {
+				f.session = nil
+			}
+			checkPost := func(attempt string, form url.Values, wantStatus, wantSends int) {
+				t.Helper()
+				w := askPost(f, c, form)
+				location, wantLocation := w.Header().Get("Location"), ""
+				if wantStatus == http.StatusSeeOther {
+					wantLocation = target
+				}
+				sends := len(operator.answers)
+				t.Logf("%s: status=%d Location=%q operator answers=%d", attempt, w.Code, location, sends)
+				if w.Code != wantStatus || location != wantLocation || sends != wantSends {
+					t.Fatalf("%s: want status=%d Location=%q operator answers=%d", attempt, wantStatus, wantLocation, wantSends)
+				}
+				if wantSends == 1 && (operator.answers[0].OptionID != form.Get("optionId") || operator.answers[0].Text != form.Get("text")) {
+					t.Fatal("operator received a different answer")
+				}
+			}
+			checkPost("old page", oldForm, tc.wantStatus, tc.wantSends)
+			if tc.signIn {
+				f.login(t)
+				checkPost("old page after fresh sign-in", oldForm, http.StatusForbidden, 0)
+				newForm := loadAskAnswerForm(t, f, c, target, askID)
+				if newForm.Get("csrf") == oldForm.Get("csrf") {
+					t.Fatal("fresh page reused the previous session's CSRF value")
+				}
+				checkPost("new page after fresh sign-in", newForm, http.StatusSeeOther, 1)
+			}
+		})
+	}
+}
+
+func loadAskAnswerForm(t *testing.T, f *authFixture, c AssemblyConfig, target, askID string) url.Values {
+	t.Helper()
+	w := httptest.NewRecorder()
+	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, target, ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("Ask page: status=%d Location=%q", w.Code, w.Header().Get("Location"))
+	}
+	answerForm := regexp.MustCompile(`(?s)<form[^>]* action="` + regexp.QuoteMeta(AsksPath+"/answer") + `"[^>]*>(.*?)</form>`)
+	match := answerForm.FindStringSubmatch(w.Body.String())
+	if match == nil {
+		t.Fatal("Ask page did not render an answer form")
+	}
+	hiddenField := regexp.MustCompile(`<input type="hidden" name="(csrf|requestID|askID)" value="([^"]+)">`)
+	form := url.Values{"optionId": {"small"}, "text": {"Synthetic answer"}}
+	for _, field := range hiddenField.FindAllStringSubmatch(match[1], -1) {
+		form.Add(field[1], html.UnescapeString(field[2]))
+	}
+	if form.Get("askID") != askID || form.Get("csrf") == "" || form.Get("requestID") == "" {
+		t.Fatal("Ask answer form did not include the selected Ask, CSRF value and request ID")
+	}
+	return form
 }
 
 func TestAsksSelectedDetailFirstInAnyState(t *testing.T) {
