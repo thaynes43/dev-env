@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       postgres:
-        image: postgres:16@sha256:40852951a80d9dfaf52a1eb1f75d477f3c379ee8b148a1f40b9fa14c56b6e8cc
+        image: postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8
         env:
           POSTGRES_PASSWORD: synthetic-ci-admin-only
           POSTGRES_DB: dev_env_v2_portal
