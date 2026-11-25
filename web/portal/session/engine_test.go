@@ -256,11 +256,13 @@ func TestConfidentialLoginCookieAndReplay(t *testing.T) {
 
 func TestLoginReturnTargetAllowlist(t *testing.T) {
 	fullCursor := AsksPath + "?cursor=" + strings.Repeat("%2f", 1024)
+	encodedCursor := AsksPath + "?cursor=page%20%E2%80%A8%26next"
 	for _, tc := range []struct{ name, target, want string }{
 		{name: "missing"},
 		{name: "sessions", target: SessionsPath, want: SessionsPath},
 		{name: "asks", target: AsksPath, want: AsksPath},
 		{name: "full cursor", target: fullCursor, want: fullCursor},
+		{name: "percent-encoded cursor", target: encodedCursor, want: encodedCursor},
 		{name: "absolute same origin", target: "https://portal.example" + AsksPath},
 		{name: "scheme relative", target: "//portal.example" + AsksPath},
 		{name: "other host", target: "https://unrelated.example" + AsksPath},
@@ -269,6 +271,9 @@ func TestLoginReturnTargetAllowlist(t *testing.T) {
 		{name: "encoded slash", target: "/%70ortal%2fprojects/dev-env/environments/internal/asks"},
 		{name: "encoded traversal", target: AsksPath + "/%2e%2e/asks"},
 		{name: "traversal", target: AsksPath + "/../asks"},
+		{name: "raw space", target: AsksPath + "?cursor=page next"},
+		{name: "raw Unicode line separator", target: AsksPath + "?cursor=page\u2028next"},
+		{name: "raw Unicode direction override", target: AsksPath + "?cursor=page\u202enext"},
 		{name: "control character", target: AsksPath + "?cursor=page\tnext"},
 		{name: "encoded control character", target: AsksPath + "?cursor=page%09next"},
 		{name: "fragment", target: AsksPath + "#"},
@@ -276,6 +281,10 @@ func TestLoginReturnTargetAllowlist(t *testing.T) {
 		{name: "non-asks path", target: TasksPath},
 		{name: "ask answer route", target: AsksPath + "/answer"},
 		{name: "extra query key", target: AsksPath + "?other=value"},
+		{name: "empty leading query part", target: AsksPath + "?&cursor=page"},
+		{name: "empty middle query part", target: AsksPath + "?cursor=page&&ask=ask-0123456789abcdef"},
+		{name: "empty trailing query part", target: AsksPath + "?cursor=page&"},
+		{name: "only empty query parts", target: AsksPath + "?&"},
 		{name: "duplicate ask", target: AsksPath + "?ask=ask-0123456789abcdef&ask=ask-aaaaaaaaaaaaaaaa"},
 		{name: "malformed escape", target: AsksPath + "?cursor=%zz"},
 		{name: "sessions query", target: SessionsPath + "?cursor=page"},
@@ -296,6 +305,43 @@ func TestLoginReturnTargetAllowlist(t *testing.T) {
 			f.e.ServeHTTP(w, f.callback)
 			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != want {
 				t.Fatalf("callback status %d or unexpected destination", w.Code)
+			}
+		})
+	}
+}
+
+func TestLoginCallbackRejectsUnvalidatedStoredReturnTarget(t *testing.T) {
+	for _, tc := range []struct{ name, target string }{
+		{name: "absolute", target: "https://unrelated.example/"},
+		{name: "scheme relative", target: "//x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupAuth(t)
+			handle, key, err := randomHandle()
+			if err != nil {
+				t.Fatal(err)
+			}
+			login := Login{
+				State:        strings.Repeat("s", 43),
+				Nonce:        strings.Repeat("n", 43),
+				Verifier:     strings.Repeat("v", 43),
+				ExpiresAt:    f.now.Add(time.Minute),
+				ReturnTarget: tc.target,
+			}
+			f.nonce = login.Nonce
+			challenge := sha256.Sum256([]byte(login.Verifier))
+			f.challenge = base64.RawURLEncoding.EncodeToString(challenge[:])
+			q := url.Values{"code": {"synthetic-code"}, "state": {login.State}}
+			r := f.request(http.MethodGet, "/auth/callback?"+q.Encode(), "")
+			r.AddCookie(&http.Cookie{Name: loginCookie, Value: handle})
+			if err := f.store.PutLogin(r.Context(), key, login); err != nil {
+				t.Fatal(err)
+			}
+
+			w := httptest.NewRecorder()
+			f.e.ServeHTTP(w, r)
+			if location := w.Header().Get("Location"); w.Code != http.StatusSeeOther || location != SessionsPath {
+				t.Fatalf("callback status %d, Location %q; want %d, %q", w.Code, location, http.StatusSeeOther, SessionsPath)
 			}
 		})
 	}
