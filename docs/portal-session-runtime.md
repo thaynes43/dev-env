@@ -173,7 +173,9 @@ for the five IDs, and server-validated dev-agents summaries with immutable
 catalog dev-env/dev-env, may later be wired. No broad helper token, session-detail
 fallback, prompts, logs, streams, downloads, mutation or grants.
 
-Fixed landing route is the dev-env/internal Attention collection. Exact TLS Host
+The callback defaults to dev-env/internal Sessions. When sign-in started from an
+Asks link, the callback uses the allowlisted path and query in the consumed
+login transaction (OP945). Exact TLS Host
 checks remain; forwarded headers cannot establish trust. Future GitOps must use
 verified Traefik-to-Go TLS, same-namespace backend, per-backend CA/serverName
 ServersTransport and isolation. Shared insecureSkipVerify is forbidden for this

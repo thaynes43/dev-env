@@ -169,8 +169,13 @@ func setupAuth(t *testing.T) *authFixture {
 
 func (f *authFixture) begin(t *testing.T) *http.Cookie {
 	t.Helper()
+	return f.beginAt(t, f.e, "/auth/login")
+}
+
+func (f *authFixture) beginAt(t *testing.T, handler http.Handler, path string) *http.Cookie {
+	t.Helper()
 	w := httptest.NewRecorder()
-	f.e.ServeHTTP(w, httptest.NewRequest("GET", "https://portal.example/auth/login", nil))
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "https://portal.example"+path, nil))
 	if w.Code != 303 {
 		t.Fatalf("login start %d", w.Code)
 	}
@@ -225,12 +230,13 @@ func (f *authFixture) request(method, path, body string) *http.Request {
 
 func TestConfidentialLoginCookieAndReplay(t *testing.T) {
 	f := setupAuth(t)
-	pending := f.begin(t)
+	target := AsksPath + "?ask=ask-0123456789abcdef"
+	pending := f.beginAt(t, f.e, "/auth/login?"+url.Values{"return": {target}}.Encode())
 	forgedSession := strings.Repeat("x", 43)
 	f.callback.AddCookie(&http.Cookie{Name: sessionCookie, Value: forgedSession})
 	w := httptest.NewRecorder()
 	f.e.ServeHTTP(w, f.callback)
-	if w.Code != 303 || f.exchanges != 1 {
+	if w.Code != 303 || w.Header().Get("Location") != target || f.exchanges != 1 {
 		t.Fatal("login failed")
 	}
 	f.session = findCookie(t, w, sessionCookie)
@@ -243,8 +249,55 @@ func TestConfidentialLoginCookieAndReplay(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	f.e.ServeHTTP(w, f.callback)
-	if w.Code != 403 || f.exchanges != 1 || strings.Contains(w.Body.String(), "synthetic-subject") {
+	if w.Code != 403 || w.Header().Get("Location") != "" || f.exchanges != 1 || strings.Contains(w.Body.String(), "synthetic-subject") {
 		t.Fatal("callback replay accepted or leaked")
+	}
+}
+
+func TestLoginReturnTargetAllowlist(t *testing.T) {
+	fullCursor := AsksPath + "?cursor=" + strings.Repeat("%2f", 1024)
+	for _, tc := range []struct{ name, target, want string }{
+		{name: "missing"},
+		{name: "sessions", target: SessionsPath, want: SessionsPath},
+		{name: "asks", target: AsksPath, want: AsksPath},
+		{name: "full cursor", target: fullCursor, want: fullCursor},
+		{name: "absolute same origin", target: "https://portal.example" + AsksPath},
+		{name: "scheme relative", target: "//portal.example" + AsksPath},
+		{name: "other host", target: "https://unrelated.example" + AsksPath},
+		{name: "backslash", target: `/\unrelated.example` + AsksPath},
+		{name: "encoded backslash", target: AsksPath + "?cursor=page%5Cnext"},
+		{name: "encoded slash", target: "/%70ortal%2fprojects/dev-env/environments/internal/asks"},
+		{name: "encoded traversal", target: AsksPath + "/%2e%2e/asks"},
+		{name: "traversal", target: AsksPath + "/../asks"},
+		{name: "control character", target: AsksPath + "?cursor=page\tnext"},
+		{name: "encoded control character", target: AsksPath + "?cursor=page%09next"},
+		{name: "fragment", target: AsksPath + "#"},
+		{name: "overlong", target: AsksPath + "?cursor=page" + strings.Repeat("&", 4096)},
+		{name: "non-asks path", target: TasksPath},
+		{name: "ask answer route", target: AsksPath + "/answer"},
+		{name: "extra query key", target: AsksPath + "?other=value"},
+		{name: "duplicate ask", target: AsksPath + "?ask=ask-0123456789abcdef&ask=ask-aaaaaaaaaaaaaaaa"},
+		{name: "malformed escape", target: AsksPath + "?cursor=%zz"},
+		{name: "sessions query", target: SessionsPath + "?cursor=page"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupAuth(t)
+			f.beginAt(t, f.e, "/auth/login?"+url.Values{"return": {tc.target}}.Encode())
+			for _, login := range f.store.logins {
+				if login.ReturnTarget != tc.want {
+					t.Fatal("unexpected return target in pending login")
+				}
+			}
+			want := tc.want
+			if want == "" {
+				want = SessionsPath
+			}
+			w := httptest.NewRecorder()
+			f.e.ServeHTTP(w, f.callback)
+			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != want {
+				t.Fatalf("callback status %d or unexpected destination", w.Code)
+			}
+		})
 	}
 }
 
@@ -252,7 +305,7 @@ func TestStateExpiryAndFailedExchangeDoNotReplay(t *testing.T) {
 	for _, mode := range []string{"wrong-state", "expired-state", "failed-exchange", "expired-during-exchange"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setupAuth(t)
-			f.begin(t)
+			f.beginAt(t, f.e, "/auth/login?"+url.Values{"return": {AsksPath}}.Encode())
 			if mode == "wrong-state" {
 				q := f.callback.URL.Query()
 				q.Set("state", strings.Repeat("x", 43))
@@ -269,14 +322,14 @@ func TestStateExpiryAndFailedExchangeDoNotReplay(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 			f.e.ServeHTTP(w, f.callback)
-			if w.Code == 303 || w.Header().Get("Set-Cookie") != "" || strings.Contains(w.Body.String(), "CANARY") {
+			if w.Code == 303 || w.Header().Get("Location") != "" || w.Header().Get("Set-Cookie") != "" || strings.Contains(w.Body.String(), "CANARY") {
 				t.Fatal("failed transaction succeeded or leaked")
 			}
 			if mode == "failed-exchange" {
 				f.exchangeFailure = false
 				w = httptest.NewRecorder()
 				f.e.ServeHTTP(w, f.callback)
-				if w.Code != 403 || f.exchanges != 1 {
+				if w.Code != 403 || w.Header().Get("Location") != "" || f.exchanges != 1 {
 					t.Fatal("exchange failure blindly replayed")
 				}
 			} else if mode == "expired-during-exchange" {
@@ -291,7 +344,7 @@ func TestStateExpiryAndFailedExchangeDoNotReplay(t *testing.T) {
 }
 
 func TestCallbackRejectsMalformedParametersAndLoginCookies(t *testing.T) {
-	for _, mode := range []string{"missing-code", "missing-state", "duplicate-code", "duplicate-state", "extra-iss", "extra-session-state", "oversized-code", "malformed-query", "missing-cookie", "duplicate-cookie", "empty-duplicate-cookie"} {
+	for _, mode := range []string{"missing-code", "missing-state", "duplicate-code", "duplicate-state", "extra-iss", "extra-session-state", "extra-return", "oversized-code", "malformed-query", "missing-cookie", "duplicate-cookie", "empty-duplicate-cookie"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setupAuth(t)
 			pending := f.begin(t)
@@ -310,6 +363,8 @@ func TestCallbackRejectsMalformedParametersAndLoginCookies(t *testing.T) {
 				q.Set("iss", f.e.config.Verifier.issuer)
 			case "extra-session-state":
 				q.Set("session_state", "synthetic")
+			case "extra-return":
+				q.Set("return", AsksPath)
 			case "oversized-code":
 				q.Set("code", strings.Repeat("x", 4097))
 			case "missing-cookie":
