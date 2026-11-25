@@ -204,6 +204,11 @@ func validLoginReturn(target string) bool {
 	if len(target) == 0 || len(target) > maxLoginReturnBytes || target[0] != '/' || strings.HasPrefix(target, "//") || strings.Contains(target, "#") {
 		return false
 	}
+	for i := range len(target) {
+		if target[i] < 0x21 || target[i] > 0x7e {
+			return false
+		}
+	}
 	decoded, err := url.PathUnescape(target)
 	if err != nil || strings.ContainsRune(decoded, '\\') || strings.ContainsFunc(decoded, unicode.IsControl) {
 		return false
@@ -214,6 +219,9 @@ func validLoginReturn(target string) bool {
 	}
 	switch u.Path {
 	case AsksPath:
+		if strings.HasPrefix(u.RawQuery, "&") || strings.HasSuffix(u.RawQuery, "&") || strings.Contains(u.RawQuery, "&&") {
+			return false
+		}
 		_, _, ok := asksQuery(u, http.MethodGet)
 		return ok
 	case SessionsPath:
