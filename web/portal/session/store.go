@@ -14,6 +14,7 @@ type Handle [32]byte
 type Login struct {
 	State, Nonce, Verifier string
 	ExpiresAt              time.Time
+	ReturnTarget           string `json:",omitempty"`
 }
 
 type Record struct {

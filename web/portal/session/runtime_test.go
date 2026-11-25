@@ -62,7 +62,7 @@ func TestAEADRowTypeVersionGenerationStateExpiryBinding(t *testing.T) {
 	h := sha256.Sum256([]byte("synthetic-handle"))
 	state := sha256.Sum256([]byte("synthetic-state"))
 	row := s.row("pending_login", h, time.Now().Add(time.Minute), state)
-	login := Login{State: strings.Repeat("s", 43), Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43), ExpiresAt: row.ExpiresAt}
+	login := Login{State: strings.Repeat("s", 43), Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43), ExpiresAt: row.ExpiresAt, ReturnTarget: AsksPath + "?ask=ask-0123456789abcdef"}
 	sealed, err := s.encrypt(row, login)
 	if err != nil {
 		t.Fatal("fixture encryption failed")
@@ -101,7 +101,7 @@ func TestAEADRowTypeVersionGenerationStateExpiryBinding(t *testing.T) {
 			var out Login
 			err := store.decrypt(changed, data, &out)
 			if mode == "valid" {
-				if err != nil || out.State != login.State {
+				if err != nil || out.State != login.State || out.ReturnTarget != login.ReturnTarget {
 					t.Fatal("valid payload rejected")
 				}
 			} else if !errors.Is(err, portal.ErrUnavailable) {
@@ -109,7 +109,7 @@ func TestAEADRowTypeVersionGenerationStateExpiryBinding(t *testing.T) {
 			}
 		})
 	}
-	if strings.Contains(string(sealed), login.State) || strings.Contains(string(sealed), login.Verifier) {
+	if strings.Contains(string(sealed), login.State) || strings.Contains(string(sealed), login.Verifier) || strings.Contains(string(sealed), login.ReturnTarget) {
 		t.Fatal("sensitive payload remained plaintext")
 	}
 }
@@ -204,7 +204,7 @@ func TestURLConstructorsRejectEmptyHostAndAmbiguousConfiguration(t *testing.T) {
 	}
 }
 
-func TestFixedLandingAndForgedReturnURLOrHost(t *testing.T) {
+func TestDefaultLandingAndForgedLoginParameterOrHost(t *testing.T) {
 	f := setupAuth(t)
 	f.begin(t)
 	w := httptest.NewRecorder()
@@ -212,7 +212,7 @@ func TestFixedLandingAndForgedReturnURLOrHost(t *testing.T) {
 	if w.Code != 303 || w.Header().Get("Location") != SessionsPath {
 		t.Fatal("callback did not use fixed authorized landing")
 	}
-	for _, path := range []string{"/auth/login?return=https://evil.example/", "/auth/login?next=//evil.example/", LandingPath + "?return=https://evil.example/"} {
+	for _, path := range []string{"/auth/login?next=//evil.example/", LandingPath + "?return=https://evil.example/"} {
 		w := httptest.NewRecorder()
 		NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizeFunc(func(context.Context, portal.Principal, portal.Resource) error { return portal.ErrDenied }), Reader: portal.UnavailableReader{}, FreshFor: time.Minute, Now: func() time.Time { return f.now }}).ServeHTTP(w, f.request("GET", path, ""))
 		if w.Code == 200 || w.Code == 303 || w.Header().Get("Location") != "" {

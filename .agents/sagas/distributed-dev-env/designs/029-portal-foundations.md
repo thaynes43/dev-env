@@ -413,6 +413,21 @@ said the green status icons clash with the theme.
   muted grey so that Running stays the only accent badge. Waiting (amber),
   Busy (blue) and Failed (red) are unchanged.
 
+### Return to the selected Ask after sign-in, 2026-11-25 (OP945)
+
+A signed-out GET of Asks carries its path and query to `/auth/login` in the
+optional `return` parameter. The portal keeps the accepted target in the
+encrypted, single-use login transaction keyed by the hash of the opaque
+`__Host-portal-login` handle. After a successful Authentik callback, it redirects
+to that exact path and query. The Asks GET checks current authorization before
+reading the selected Ask. Opening the link leaves any answer for a separate
+authorized form submission.
+
+The target is limited to 4096 bytes and must use the exact relative Asks path
+with the existing `ask` and `cursor` query keys, or the bare Sessions path. A
+missing or refused target lands on Sessions. Cookie attributes, login expiry,
+state, nonce, PKCE and single-use consumption keep their existing checks.
+
 ### Usable demo pass, 2026-10-27
 
 Tom: "Is the site usable? It looked stubbed out when I logged in." Rendering

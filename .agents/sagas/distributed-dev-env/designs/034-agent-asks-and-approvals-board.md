@@ -525,9 +525,11 @@ page record still contain no Ask text or approver identity.
 Lane B uses the fixed title and body “An agent needs your answer”, priority 0,
 and a link to the configured HTTPS portal origin plus
 `/portal/projects/dev-env/environments/internal/asks?ask=<id>`. No question text, PR
-title, principal, token or signed approval in the push. The link opens an
-authenticated GET; it never answers or approves. Record Ask ID and event
-kind as correlation. Pushover acceptance is not phone delivery.
+title, principal, token or signed approval in the push. The link opens a GET.
+If sign-in is needed, a successful callback returns to the same link and the
+GET checks current Ask access (OP945). That GET cannot answer or approve.
+Record Ask ID and event kind as correlation. Pushover acceptance is not phone
+delivery.
 
 Source flags: keeper `--enable-ask-notifications` defaults false, requires
 leader election and `--ask-notify-portal-origin` (an HTTPS origin without

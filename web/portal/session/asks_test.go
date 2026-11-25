@@ -106,11 +106,10 @@ func (o *asksOperator) trip(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {mediaJSON}}, Body: io.NopCloser(strings.NewReader(string(raw)))}, nil
 }
 
-func asksFixture(t *testing.T) (*authFixture, AssemblyConfig, *asksOperator, url.Values) {
+func asksSetup(t *testing.T) (*authFixture, AssemblyConfig, *asksOperator) {
 	t.Helper()
 	f := setupAuth(t)
 	f.now = time.Date(2026, 10, 29, 19, 5, 0, 0, time.UTC)
-	f.login(t)
 	reservations := &commandMemory{reservations: map[string]commandReservation{}, terminals: map[string]apiv1.PortalMessageReceipt{}}
 	f.e.config.Store = &askSessionStore{f.store, reservations}
 	operator := &asksOperator{t: t, items: []apiv1.Ask{syntheticAsk(f.now)}}
@@ -121,6 +120,13 @@ func asksFixture(t *testing.T) (*authFixture, AssemblyConfig, *asksOperator, url
 	source := &AsksSource{path: token, client: &http.Client{Transport: tripFunc(operator.trip)}, now: func() time.Time { return f.now }}
 	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
 	c := AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Asks: source, FreshFor: time.Minute, Now: func() time.Time { return f.now }}
+	return f, c, operator
+}
+
+func asksFixture(t *testing.T) (*authFixture, AssemblyConfig, *asksOperator, url.Values) {
+	t.Helper()
+	f, c, operator := asksSetup(t)
+	f.login(t)
 	_, record, err := f.e.current(f.request(http.MethodGet, AsksPath, ""))
 	if err != nil {
 		t.Fatal(err)
@@ -847,6 +853,50 @@ func TestAsksContextLinksUseExactHostAllowlist(t *testing.T) {
 			u, _ := url.Parse(test.link)
 			if !strings.Contains(body, u.Host) {
 				t.Fatal("context host hidden")
+			}
+		})
+	}
+}
+
+func TestAsksSignInReturnsToSelectedAsk(t *testing.T) {
+	for _, admitted := range []bool{true, false} {
+		t.Run(map[bool]string{true: "admitted", false: "denied"}[admitted], func(t *testing.T) {
+			f, c, o := asksSetup(t)
+			if !admitted {
+				c.Authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
+					return userInfoResponse(strings.Replace(currentAllow, `"portal_is_admin":true`, `"portal_is_admin":false`, 1)), nil
+				})
+			}
+			handler := NewAssembly(c)
+			selected := o.items[0]
+			target := AsksPath + "?cursor=page%2f%2b%2e&ask=" + selected.ID
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, f.request(http.MethodGet, target, ""))
+			destination := w.Header().Get("Location")
+			login, err := url.Parse(destination)
+			if err != nil || login.Path != "/auth/login" || login.Query().Get("return") != target || w.Code != http.StatusSeeOther || o.reads != 0 {
+				t.Fatal("signed-out GET did not preserve the Ask link before reading")
+			}
+
+			f.beginAt(t, handler, destination)
+			w = httptest.NewRecorder()
+			handler.ServeHTTP(w, f.callback)
+			destination = w.Header().Get("Location")
+			if w.Code != http.StatusSeeOther || destination != target || o.reads != 0 {
+				t.Fatal("callback did not return to the identical Ask URL")
+			}
+			f.session = findCookie(t, w, sessionCookie)
+			w = httptest.NewRecorder()
+			handler.ServeHTTP(w, f.request(http.MethodGet, destination, ""))
+			if admitted {
+				if w.Code != http.StatusOK || w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), `id="`+selected.ID+`"`) {
+					t.Fatal("authorized GET did not render the selected Ask directly")
+				}
+			} else if w.Code != http.StatusForbidden || w.Header().Get("Location") != "" || o.reads != 0 {
+				t.Fatal("the return target bypassed fresh Ask authorization")
+			}
+			if len(o.answers) != 0 {
+				t.Fatal("opening the Ask link submitted an answer")
 			}
 		})
 	}

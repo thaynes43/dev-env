@@ -215,9 +215,10 @@ An unreadable Ask does not block pushes for readable records. An incomplete
 scan preserves all dedupe entries because it cannot prove any Ask absent.
 The title and body are both `An agent needs your answer`, priority 0. The
 link is the configured HTTPS origin plus
-`/portal/projects/dev-env/environments/internal/asks?ask=<id>`. It opens an
-authenticated GET; the push carries no question, PR title, principal, token
-or approval material.
+`/portal/projects/dev-env/environments/internal/asks?ask=<id>`. If sign-in is
+needed, the portal returns to the same Ask link after a successful sign-in and
+checks the signed-in person's current access before showing it. The push carries
+no question, PR title, principal, token or approval material.
 
 Pending Asks from the same original requester coalesce into one push linking
 the oldest pending Ask. All those IDs are marked done for notification
