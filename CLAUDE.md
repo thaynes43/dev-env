@@ -48,6 +48,15 @@ These large files are references. Search them for the item you need:
 | `.agents/CLAUDE-RESUME-2026-10-12.md`, `-2026-10-13.md` | historical pickup briefs: requirement history and stopped routes |
 | `docs/repo-layout.md` | one line for every directory and Go package |
 
+## Mac cluster commands
+
+For authorized cluster work on the existing Mac, invoke
+[`scripts/mac-cluster.py`](docs/mac-cluster-launcher.md) by its absolute checkout
+path instead of bare kubectl or Flux. It pins the existing Mac token-only config
+and requires the expected live identity before dispatch. A refusal stops the
+command; do not switch to the human config or refresh login. This is a routing
+guard, not an access grant or a sandbox. In-pod tools keep their own configuration.
+
 ## Build and test
 
 - From release 2.97.0 the agent image carries Go, the version that built agentd, with
