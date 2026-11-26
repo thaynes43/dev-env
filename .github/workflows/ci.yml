@@ -171,6 +171,31 @@ jobs:
       - name: go test -p 2
         run: make test
 
+  # Keep this non-required job until a later step moves the Test job to ubuntu-26.04.
+  test-ubuntu-2604:
+    name: Test on ubuntu-26.04 (OP875, not required)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Run both packages
+        env:
+          GOMAXPROCS: "2"
+          GOFLAGS: -p=2
+          GOTOOLCHAIN: local
+          CGO_ENABLED: "0"
+        run: |
+          python3 -c 'import io, sys; print(f"Python {sys.version.split()[0]}, default buffer {io.DEFAULT_BUFFER_SIZE} bytes")'
+          /bin/echo --version
+          nice -n 19 go test -p 2 -count=1 -v ./images/agent/tools/... ./internal/allowancecollector/...
+
   # Its own job, so this suite's runtime stays out of the Go Test job's timeout budget.
   cursor-interactive:
     name: Cursor interactive session helper tests

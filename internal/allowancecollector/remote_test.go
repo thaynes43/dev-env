@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,16 +20,13 @@ import (
 	"github.com/thaynes43/dev-env/internal/usagecollector"
 )
 
-// Exercise the fixed delivery bootstrap using an existing harmless ELF, never
-// a provider/native client. The binary is anonymous, digest-checked and sealed.
+// Exercise the fixed delivery bootstrap using a test-built ELF. The binary is
+// anonymous, digest-checked and sealed.
 func TestAnonymousBootstrapExecutesExactVerifiedELFAndRejectsDigestMismatch(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/python3"); err != nil {
 		t.Skip("python3 unavailable")
 	}
-	binary, err := os.ReadFile("/bin/echo")
-	if err != nil {
-		t.Skip("harmless ELF unavailable")
-	}
+	binary := buildBootstrapFixture(t)
 	for _, valid := range []bool{true, false} {
 		sha := digest(binary)
 		if !valid {
@@ -36,6 +34,7 @@ func TestAnonymousBootstrapExecutesExactVerifiedELFAndRejectsDigestMismatch(t *t
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		cmd := exec.CommandContext(ctx, "/usr/bin/python3", "-c", bootstrap, strconv.Itoa(len(binary)), sha)
+		cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 		cmd.Stdin = io.MultiReader(bytes.NewReader(binary), bytes.NewReader([]byte("unconsumed request")))
 		out, err := cmd.Output()
 		cancel()
@@ -46,6 +45,37 @@ func TestAnonymousBootstrapExecutesExactVerifiedELFAndRejectsDigestMismatch(t *t
 			t.Fatal("wrong digest executed")
 		}
 	}
+}
+
+func buildBootstrapFixture(t *testing.T) []byte {
+	t.Helper()
+	// The bootstrap sets argv[0] to agent-run. A multicall /bin/echo would
+	// interpret that name as the command to dispatch.
+	const source = `package main
+
+import "os"
+
+func main() {
+	os.Stdout.WriteString(os.Args[1] + "\n")
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(dir, "echo-argument")
+	cmd := exec.Command("go", "build", "-p", "1", "-o", fixture, path)
+	cmd.Dir = dir
+	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "GOENV=off", "GOTOOLCHAIN=local", "CGO_ENABLED=0", "GOMAXPROCS=1"}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build bootstrap fixture: %v\n%s", err, out)
+	}
+	binary, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binary
 }
 
 type diagnosticExecutor struct {
