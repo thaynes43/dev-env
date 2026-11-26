@@ -103,7 +103,7 @@ ARG TASK_VERSION=3.54.0
 # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.+)$
 ARG OPENTOFU_VERSION=1.13.2
 # renovate: datasource=github-releases depName=restic/restic extractVersion=^v(?<version>.+)$
-ARG RESTIC_VERSION=0.19.1
+ARG RESTIC_VERSION=0.20.0
 # talosctl — read-only node triage (dmesg/logs/get) via apid; MUST track the cluster's
 # Talos version (nodes run v1.13.3). Same style as kubectl: the `v` lives in the ARG.
 # renovate: datasource=github-releases depName=siderolabs/talos
