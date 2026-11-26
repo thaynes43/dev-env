@@ -94,7 +94,7 @@ GOLANGCI_LINT_VERSION ?= v2.15.0
 # setup-envtest downloads kube-apiserver, etcd and kubectl for the envtest suites
 # (from the controller-tools GitHub releases) into bin/tools/envtest/.
 # renovate: datasource=go depName=sigs.k8s.io/controller-runtime/tools/setup-envtest
-SETUP_ENVTEST_VERSION ?= v0.25.2
+SETUP_ENVTEST_VERSION ?= v0.25.3
 # The API server the envtest suites run against. It follows the main cluster's
 # Kubernetes minor (v1.35.5 on 2026-10-06), not the client libraries in go.mod,
 # so the suites prove the CRDs on the server haynes-ops applies them to. Bump it
