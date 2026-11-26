@@ -758,7 +758,8 @@ class Chunks:
 if mode == "early":
     real_popen = mod.subprocess.Popen
     def popen(args, stdin=None, **kwargs):
-        proc = real_popen(args, stdin=stdin, **kwargs)
+        # See the broken pipe on the first write, regardless of Python's buffer size.
+        proc = real_popen(args, stdin=stdin, bufsize=0, **kwargs)
         if proc.stdin is not None:
             fcntl.fcntl(proc.stdin.fileno(), fcntl.F_SETPIPE_SZ, 4096)
         return proc
