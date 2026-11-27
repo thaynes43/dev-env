@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.114.0](https://github.com/thaynes43/dev-env/compare/v2.113.0...v2.114.0) (2026-11-27)
+
+
+### Features
+
+* **frontdoor:** MCP catalog, operating rules and work-item handoff resources, and a retired-session dry run (OP528) ([#1256](https://github.com/thaynes43/dev-env/issues/1256)) ([941e448](https://github.com/thaynes43/dev-env/commit/941e4485e24448bb601dd60eaf8473cadfe09f00))
+* **grants:** pod-exec grants, a time-limited shell in one named pod approved by Tom (OP945) ([#1253](https://github.com/thaynes43/dev-env/issues/1253)) ([b113a50](https://github.com/thaynes43/dev-env/commit/b113a5051c0dcd5cf38393f0d69134564033fae4))
+* **keeper:** early recovery from a revoked Claude access token, off by default (DESIGN-069 slice 6, OP938) ([#1238](https://github.com/thaynes43/dev-env/issues/1238)) ([c2908cb](https://github.com/thaynes43/dev-env/commit/c2908cb4f9bbd42c28417f74bbd64486879a1979))
+
+
+### Bug Fixes
+
+* **deps:** update kubernetes monorepo to v0.37.3 ([#1272](https://github.com/thaynes43/dev-env/issues/1272)) ([54aa52b](https://github.com/thaynes43/dev-env/commit/54aa52bba04bf6183087c3bbda7f80bce544895d))
+* **keeper:** slice 6 enablement prep, coalesced diagnostic classes, closing probe kept, guard tests (DESIGN-069, OP939) ([#1241](https://github.com/thaynes43/dev-env/issues/1241)) ([5deb7fd](https://github.com/thaynes43/dev-env/commit/5deb7fd5dddd113321192c503761eaef73773015))
+* **portal:** return to the selected Ask after sign-in (OP945) ([#1266](https://github.com/thaynes43/dev-env/issues/1266)) ([ce5a6eb](https://github.com/thaynes43/dev-env/commit/ce5a6eb91db2501b00f0daa95d09be8e2ab30f9f))
+
 ## [2.113.0](https://github.com/thaynes43/dev-env/compare/v2.112.0...v2.113.0) (2026-11-19)
 
 
